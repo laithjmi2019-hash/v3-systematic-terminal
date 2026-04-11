@@ -31,17 +31,15 @@ def get_ai_insight(result: dict) -> dict:
 # ----------- PAGES ---------------
 def page_terminal():
     st.title("Systematic Terminal")
+    st.write("Search Company or Ticker:")
     
-    with st.form(key="search_form"):
-        st.write("Search Company or Ticker:")
-        selected_ticker = st_searchbox(
-            search_companies,
-            key="ticker_search_box"
-        )
-        submitted = st.form_submit_button("Analyze")
+    selected_ticker = st_searchbox(
+        search_companies,
+        key="ticker_search_box"
+    )
     
-    if submitted and selected_ticker:
-        with st.spinner("Resolving query & fetching fundamentals..."):
+    if selected_ticker:
+        with st.spinner(f"Fetching fundamentals for {selected_ticker}..."):
             ticker = resolve_ticker(selected_ticker).upper()
             quote = get_quote(ticker)
             financials = get_historical_financials(ticker, 10)
