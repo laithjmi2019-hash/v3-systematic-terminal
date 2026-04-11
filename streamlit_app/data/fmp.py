@@ -36,6 +36,27 @@ def resolve_ticker(query: str) -> str:
         
     return query.upper()
 
+@st.cache_data(ttl=86400)
+def search_companies(query: str) -> list:
+    if not query:
+        return []
+    try:
+        url = f"https://query2.finance.yahoo.com/v1/finance/search?q={query}"
+        headers = {'User-Agent': 'Mozilla/5.0'}
+        res = requests.get(url, headers=headers)
+        data = res.json()
+        if 'quotes' in data:
+            results = []
+            for item in data['quotes'][:7]: # limit to top 7 drops
+                sym = item.get('symbol', '')
+                name = item.get('shortname', sym)
+                if sym:
+                    results.append((f"{sym} - {name}", sym))
+            return results
+    except:
+        return []
+    return []
+
 @st.cache_data(ttl=3600)
 def get_quote(ticker: str) -> dict:
     if FMP_API_KEY:

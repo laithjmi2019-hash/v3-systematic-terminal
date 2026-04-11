@@ -1,11 +1,12 @@
 import streamlit as st
 import pandas as pd
 import plotly.graph_objects as go
-from data.fmp import get_quote, get_historical_financials, resolve_ticker
+from data.fmp import get_quote, get_historical_financials, resolve_ticker, search_companies
 from data.macro import get_macro_state
 from engine.scoring import evaluate_stock
 from engine.alpha import calculate_alpha_and_rank
 from engine.portfolio import evaluate_portfolio
+from streamlit_searchbox import st_searchbox
 
 st.set_page_config(page_title="V3 Institutional Terminal", layout="wide", page_icon="📈")
 
@@ -32,12 +33,16 @@ def page_terminal():
     st.title("Systematic Terminal")
     
     with st.form(key="search_form"):
-        raw_input = st.text_input("Enter Ticker or Company Name", "AAPL")
+        st.write("Search Company or Ticker:")
+        selected_ticker = st_searchbox(
+            search_companies,
+            key="ticker_search_box"
+        )
         submitted = st.form_submit_button("Analyze")
     
-    if submitted:
+    if submitted and selected_ticker:
         with st.spinner("Resolving query & fetching fundamentals..."):
-            ticker = resolve_ticker(raw_input).upper()
+            ticker = resolve_ticker(selected_ticker).upper()
             quote = get_quote(ticker)
             financials = get_historical_financials(ticker, 10)
             macro = get_macro_state()

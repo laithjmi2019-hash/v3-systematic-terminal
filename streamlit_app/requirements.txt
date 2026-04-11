@@ -5,3 +5,4 @@ plotly>=5.14.0
 yfinance>=0.2.30
 requests>=2.31.0
 matplotlib>=3.7.0
+streamlit-searchbox>=0.1.0
