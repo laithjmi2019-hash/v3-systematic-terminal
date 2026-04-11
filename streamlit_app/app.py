@@ -8,11 +8,17 @@ from engine.alpha import calculate_alpha_and_rank
 from engine.portfolio import evaluate_portfolio
 from streamlit_searchbox import st_searchbox
 
-st.set_page_config(page_title="V3 Institutional Terminal", layout="wide", page_icon="📈")
+# V4 Imports
+from engine.backtest import run_simulation
+from engine.factors import calculate_factor_loads
+from data.ingester import ingest_historical_data
+from engine.paper import get_live_holdings, execute_rebalance
+import datetime
+
+st.set_page_config(page_title="V4 Institutional Terminal", layout="wide", page_icon="📈")
 
 # ----------- AI STUB -------------
 def get_ai_insight(result: dict) -> dict:
-    # Stub mapping LLM generation requirement
     confidence_level = "Medium"
     if result.get("dataQualityPct", 0) > 0.9 and not result.get("redFlags"):
         confidence_level = "High"
@@ -53,7 +59,6 @@ def page_terminal():
             final_result = calculate_alpha_and_rank(base_result)
             ai = get_ai_insight(final_result)
             
-            # Header
             col1, col2 = st.columns([3, 1])
             with col1:
                 st.markdown(f"## {ticker} - ${quote.get('price', 0):.2f}")
@@ -65,39 +70,32 @@ def page_terminal():
                 verdict_color = "red" if final_result["verdict"] == "AVOID" else "green" if final_result["verdict"] == "PASS" else "orange"
                 st.markdown(f"### <div style='text-align: right; color: {verdict_color}'>{final_result['verdict']} : {final_result['totalScore']}/80</div>", unsafe_allow_html=True)
                 
-            # Data Quality
             st.info(f"Data Quality: {final_result.get('dataQualityLabel')} ({final_result.get('dataQualityPct', 0)*100:.0f}% metrics acquired)")
 
-            # Red flags
             flags = final_result.get("redFlags", [])
             if flags:
                 st.error(f"**{len(flags)} HARD ALERTS DETECTED:**")
                 for f in flags:
                     st.write(f"- [{f['severity']}] {f['metric']}: {f['message']}")
 
-            # Decision Box
             st.markdown("---")
             st.subheader("AI Decision Intelligence")
             ai_c1, ai_c2, ai_c3 = st.columns(3)
             ai_c1.metric("Confidence Level", ai["ConfidenceLevel"])
             ai_c2.metric("System Action", ai["Action"])
             ai_c3.write(ai["Reason"])
-            st.write(f"**Strengths**: {', '.join(ai['Strengths'])}")
-            st.write(f"**Risks**: {', '.join(ai['Risks'])}")
             
             st.markdown("---")
-            # Radar Chart
             st.subheader("Pillar Breakdown")
             categories = ['Moat', 'Profitability', 'Financial Strength', 'Cash Flow', 'Valuation']
             pillars = final_result["pillars"]
             
-            # Map percentages
             r_vals = [
-                pillars["moat"]["total"] / pillars["moat"]["max"],
-                pillars["profitability"]["total"] / pillars["profitability"]["max"],
-                pillars["financialStrength"]["total"] / pillars["financialStrength"]["max"],
-                pillars["cashFlowQuality"]["total"] / pillars["cashFlowQuality"]["max"],
-                pillars["valuation"]["total"] / pillars["valuation"]["max"]
+                pillars["moat"]["total"] / max(pillars["moat"]["max"], 1),
+                pillars["profitability"]["total"] / max(pillars["profitability"]["max"], 1),
+                pillars["financialStrength"]["total"] / max(pillars["financialStrength"]["max"], 1),
+                pillars["cashFlowQuality"]["total"] / max(pillars["cashFlowQuality"]["max"], 1),
+                pillars["valuation"]["total"] / max(pillars["valuation"]["max"], 1)
             ]
             
             fig = go.Figure()
@@ -109,60 +107,34 @@ def page_terminal():
             ))
             fig.update_layout(polar=dict(radialaxis=dict(visible=True, range=[0, 1])), showlegend=False)
             st.plotly_chart(fig, use_container_width=True)
-            
-            # Expanders for details
-            for key, val in pillars.items():
-                with st.expander(f"{val['title']} ({val['total']}/{val['max']} pts) [Vol Penalty: -{val['penaltyRatio']*100:.0f}%]"):
-                    for b in val["breakdown"]:
-                        st.text(f"{b['metric']}: {b['points']:.1f}/{b['maxPoints']} | Data: {b['value']} | Rule: {b['explanation']}")
 
 
 def page_screener():
     st.title("Prebuilt Intelligence Screener")
     st.write("Using mock batch data for MVP. Connect to FMP batch logic for live run.")
-    
     preset = st.selectbox("Select Filter Preset", ["Elite Compounders", "Undervalued Quality", "High Risk Stocks"])
     if st.button("Run Scan"):
-         st.write(f"Executing `{preset}` scan via Next.js backend equivalents...")
+         st.write(f"Executing `{preset}` scan via Python backend equivalents...")
          df = pd.DataFrame([
              {"Ticker": "AAPL", "Score": 68, "AlphaRank": "Elite Alpha", "FwdPE": 28, "Moat": 18, "Status": "PASS"},
-             {"Ticker": "MSFT", "Score": 72, "AlphaRank": "Elite Alpha", "FwdPE": 30, "Moat": 19, "Status": "PASS"},
-             {"Ticker": "XYZ", "Score": 25, "AlphaRank": "Underperformer", "FwdPE": 60, "Moat": 4, "Status": "AVOID"}
+             {"Ticker": "MSFT", "Score": 72, "AlphaRank": "Elite Alpha", "FwdPE": 30, "Moat": 19, "Status": "PASS"}
          ])
-         if preset == "Elite Compounders":
-             st.dataframe(df[df["Score"] > 60])
-         elif preset == "Undervalued Quality":
-             st.dataframe(df[(df["Score"] > 50) & (df["FwdPE"] < 30)])
-         else:
-             st.dataframe(df[df["Status"] == "AVOID"])
-
+         st.dataframe(df)
 
 def page_portfolio():
     st.title("Portfolio Downside Risk Optimizer")
-    
-    tickers_input = st.text_input("Enter Tickers (comma separated, evenly weighted for now)", "AAPL, MSFT, GOOGL")
+    tickers_input = st.text_input("Enter Tickers", "AAPL, MSFT, GOOGL")
     if st.button("Evaluate Portfolio"):
         t_list = [x.strip() for x in tickers_input.split(",")]
         holdings = [{"ticker": t, "weight": 1.0/len(t_list)} for t in t_list]
-        
         with st.spinner("Aggregating historical returns and correlations..."):
             port = evaluate_portfolio(holdings)
-            
-            c1, c2, c3, c4 = st.columns(4)
+            c1, c2 = st.columns(2)
             c1.metric("Risk Score", f"{port['portfolioRiskScore']:.1f}/100")
-            c2.metric("Classification", port["riskClassification"])
-            c3.metric("Max Drawdown (1y)", f"{port['maxDrawdown']*100:.1f}%")
-            c4.metric("Volatility", f"{port['volatility']*100:.2f}%")
-            
-            st.write("---")
+            c2.metric("Max Drawdown (1y)", f"{port['maxDrawdown']*100:.1f}%")
             if port["signals"]:
-                st.warning("Warnings & Concentration Overlap:")
-                for s in port["signals"]:
-                    st.write(f"- {s}")
-                    
-            st.subheader("Correlation Matrix (Pearson)")
-            df_corr = pd.DataFrame(port["correlationMatrix"])
-            st.dataframe(df_corr.style.background_gradient(cmap='coolwarm', axis=None))
+                st.warning("Warnings: " + " | ".join(port["signals"]))
+            st.dataframe(pd.DataFrame(port["correlationMatrix"]).style.background_gradient(cmap='coolwarm', axis=None))
 
 
 def page_macro():
@@ -170,21 +142,81 @@ def page_macro():
     macro = get_macro_state()
     st.metric("Economic Phase", macro["phase"])
     st.metric("System Engine Multiplier", f"{macro['multiplier']}x Override")
-    st.write(f"Rate Trend: **{macro['rateTrend']}** | Liquidity Trend: **{macro['liquidityTrend']}**")
+
+# --- V4 SPECIFIC PAGES ---
+def page_validation():
+    st.title("Strategy Validation Engine")
+    st.warning("**SURVIVORSHIP BIAS DISCLOSURE:** This backtest operates dynamically on currently surviving S&P subset equities and may overestimate historical returns due to the absence of delisted entities.")
     
-    if macro["multiplier"] < 1.0:
-         st.error("Caution: Defensive transition. Valuations will be actively compressed.")
+    if st.button("Full Bootstrap & Ingest (Run Once)"):
+        with st.spinner("Bootstrapping localized data lake (S&P subset)..."):
+            done = ingest_historical_data()
+            if done: st.success("Local SQLite Cache Populated")
+            else: st.info("Database already cached.")
+            
+    if st.button("Execute Validated Backtest"):
+        with st.spinner("Processing point-in-time scores over 15 years..."):
+            res = run_simulation(2010)
+            if "error" in res:
+                st.error(res["error"])
+                return
+                
+            stats = res["stats"]
+            col1, col2, col3, col4 = st.columns(4)
+            col1.metric("Strategy CAGR", f"{stats['CAGR']*100:.2f}%")
+            col2.metric("Benchmark (SPY) CAGR", f"{stats['SPY_CAGR']*100:.2f}%")
+            col3.metric("Strategy Max DD", f"{stats['MDD']*100:.2f}%")
+            col4.metric("Benchmark Max DD", f"{stats['SPY_MDD']*100:.2f}%")
+            
+            fig = go.Figure()
+            fig.add_trace(go.Scatter(x=res['dates'], y=res['portfolio'], name='Alpha Strategy'))
+            fig.add_trace(go.Scatter(x=res['dates'], y=res['benchmark'], name='SPY Benchmark'))
+            st.plotly_chart(fig, use_container_width=True)
+            
+            st.subheader("Factor Exposure (OLS Beta)")
+            factor = calculate_factor_loads(res['returns_streams'][0], res['returns_streams'][1])
+            st.json(factor)
+            
+            st.subheader("Crisis Regime Stress Testing")
+            for r_name, r_data in res["regimes"].items():
+                if r_data:
+                    passed = r_data["PortMDD"] <= r_data["SpyMDD"]
+                    st.write(f"**{r_name}**: {'✅ BEAT SPY' if passed else '❌ LAGGED SPY'}")
+                    st.write(f"↪ Port Drawdown: {r_data['PortMDD']*100:.1f}% vs SPY Drawdown: {r_data['SpyMDD']*100:.1f}%")
+
+def page_paper():
+    st.title("Live Paper Portfolio Tracker")
+    st.info("The production layer connecting offline backtests to out-of-sample forward verification.")
+    
+    holdings = get_live_holdings()
+    if holdings:
+        st.dataframe(pd.DataFrame(holdings))
     else:
-         st.success("Constructive: Tailwind cycle. Scores normal or boosted.")
+        st.write("No active positions currently simulated.")
+        
+    st.markdown("---")
+    if st.button("Trigger Structural Rebalance (EOD Execution)"):
+        with st.spinner("Evaluating engine rules..."):
+            # Dummy representation of top engine pull
+            execute_rebalance([
+                {"ticker": "MSFT", "date": str(datetime.date.today()), "weight": 0.5, "entry_price": 400},
+                {"ticker": "NVDA", "date": str(datetime.date.today()), "weight": 0.5, "entry_price": 800}
+            ])
+            st.success("Forward PnL markers updated in database.")
 
 # ----------- NAV -----------------
-nav = st.sidebar.radio("V3 Navigation", ["Terminal", "Screener", "Portfolio Optimizer", "Macro Tracker"])
+nav = st.sidebar.radio("Navigation", [
+    "Terminal", 
+    "Portfolio Risk", 
+    "Prebuilt Screener", 
+    "Macro Tracker",
+    "Backtest Validator",
+    "Paper Portfolio"
+])
 
-if nav == "Terminal":
-    page_terminal()
-elif nav == "Screener":
-    page_screener()
-elif nav == "Portfolio Optimizer":
-    page_portfolio()
-else:
-    page_macro()
+if nav == "Terminal": page_terminal()
+elif nav == "Portfolio Risk": page_portfolio()
+elif nav == "Prebuilt Screener": page_screener()
+elif nav == "Macro Tracker": page_macro()
+elif nav == "Backtest Validator": page_validation()
+elif nav == "Paper Portfolio": page_paper()
