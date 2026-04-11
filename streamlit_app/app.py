@@ -30,9 +30,12 @@ def get_ai_insight(result: dict) -> dict:
 # ----------- PAGES ---------------
 def page_terminal():
     st.title("Systematic Terminal")
-    raw_input = st.text_input("Enter Ticker or Company Name", "AAPL")
     
-    if st.button("Analyze"):
+    with st.form(key="search_form"):
+        raw_input = st.text_input("Enter Ticker or Company Name", "AAPL")
+        submitted = st.form_submit_button("Analyze")
+    
+    if submitted:
         with st.spinner("Resolving query & fetching fundamentals..."):
             ticker = resolve_ticker(raw_input).upper()
             quote = get_quote(ticker)
