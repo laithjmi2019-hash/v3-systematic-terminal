@@ -7,7 +7,7 @@ import streamlit as st
 
 # We lock to 20 representative S&P stocks + macro ETFs for the MVP ingestion 
 # to avoid 12 hour fetch loops on Streamlit cloud
-UNIVERSE_SUBSET = ["AAPL", "MSFT", "GOOGL", "AMZN", "NVDA", "META", "BRK-B", "JPM", "JNJ", "V", "PG", "UNH", "HD", "MA", "INTC", "CVX", "ABBV", "PFE", "CSCO", "PEP", "SPY", "TLT", "HYG", "RSP", "^VIX", "^TNX"]
+UNIVERSE_SUBSET = ["AAPL", "MSFT", "GOOGL", "AMZN", "NVDA", "META", "BRK-B", "JPM", "JNJ", "V", "PG", "UNH", "HD", "MA", "INTC", "CVX", "ABBV", "PFE", "CSCO", "PEP", "SPY", "QQQ", "IWM", "TLT", "HYG", "RSP", "^VIX", "^TNX", "^IRX"]
 
 @st.cache_data(ttl=86400)
 def ingest_historical_data():

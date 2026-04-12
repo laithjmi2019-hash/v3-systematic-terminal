@@ -182,8 +182,10 @@ def page_validation():
             col4.metric("Benchmark Max DD", f"{stats['SPY_MDD']*100:.2f}%")
             
             fig = go.Figure()
-            fig.add_trace(go.Scatter(x=res['dates'], y=res['portfolio'], name='Alpha Strategy Base'))
-            fig.add_trace(go.Scatter(x=res['dates'], y=res['benchmark'], name='SPY Benchmark'))
+            fig.add_trace(go.Scatter(x=res['dates'], y=res['portfolio'], name='Alpha Strategy (Tx Fee Adjusted)'))
+            fig.add_trace(go.Scatter(x=res['dates'], y=res['benchmark_spy'], name='SPY (S&P 500)'))
+            fig.add_trace(go.Scatter(x=res['dates'], y=res['benchmark_qqq'], name='QQQ (Nasdaq)', opacity=0.5))
+            fig.add_trace(go.Scatter(x=res['dates'], y=res['benchmark_iwm'], name='IWM (Russell 2k)', opacity=0.5))
             st.plotly_chart(fig, use_container_width=True)
             
             st.subheader("Rolling Factor Exposure (1Y OLS Regression)")
@@ -194,7 +196,7 @@ def page_validation():
             
             if factor["BetaSeries"]:
                 fig2 = go.Figure()
-                fig2.add_trace(go.Scatter(y=factor["BetaSeries"], name='Rolling Beta'))
+                fig2.add_trace(go.Scatter(y=factor["BetaSeries"], name='Rolling Beta against SPY'))
                 st.plotly_chart(fig2, use_container_width=True, height=200)
             
             st.subheader("Crisis Regime Edge Testing")

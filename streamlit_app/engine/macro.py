@@ -64,23 +64,38 @@ def get_macro_state(date_str: str = None) -> dict:
             else: rates_signal = 7
             
             risk_score = spy_signal + breadth_signal + vix_signal + rates_signal
+            
+        # Conflict Detection Layer (Phase 16)
+        # SPY mapping: trend positive > 200ma (signal > 0), Breadth mapping: spread negative (signal < 15)
+        is_conflicting = False
+        if (spy_signal > 0 and breadth_signal < 15) or (spy_signal == 0 and breadth_signal > 20):
+            is_conflicting = True
 
         # State assignment
         if risk_score > 70:
             state = "Risk-ON"
+            exposure_limit = 1.0 # 100% target max
             exposure_range = "90-100%"
         elif risk_score < 40:
             state = "Risk-OFF"
+            exposure_limit = 0.3 # 30% target max
             exposure_range = "10-30%"
         else:
             state = "Neutral"
+            exposure_limit = 0.7 # 70% target max
             exposure_range = "50-70%"
+            
+        if is_conflicting:
+            state += " (Conflict)"
+            exposure_limit = min(exposure_limit, 0.5)
+            exposure_range = "Maximum 50% (Hedged)"
 
         return {
             "riskScore": risk_score,
             "state": state,
             "exposure": exposure_range,
-            "multiplier": 1.1 if state == "Risk-ON" else (0.8 if state == "Risk-OFF" else 1.0)
+            "exposureTarget": exposure_limit,
+            "multiplier": 1.1 if "Risk-ON" in state else (0.8 if "Risk-OFF" in state else 1.0)
         }
     except Exception as e:
-        return {"riskScore": 50, "state": "Neutral", "exposure": "50-70%", "multiplier": 1.0}
+        return {"riskScore": 50, "state": "Neutral", "exposure": "50-70%", "exposureTarget": 0.5, "multiplier": 1.0}
