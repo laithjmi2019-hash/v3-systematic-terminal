@@ -98,15 +98,18 @@ def page_terminal():
                 pillars["valuation"]["total"] / max(pillars["valuation"]["max"], 1)
             ]
             
-            fig = go.Figure()
-            fig.add_trace(go.Scatterpolar(
-                r=r_vals + [r_vals[0]],
-                theta=categories + [categories[0]],
-                fill='toself',
-                name=ticker
-            ))
-            fig.update_layout(polar=dict(radialaxis=dict(visible=True, range=[0, 1])), showlegend=False)
-            st.plotly_chart(fig, use_container_width=True)
+            try:
+                fig = go.Figure()
+                fig.add_trace(go.Scatterpolar(
+                    r=r_vals + [r_vals[0]],
+                    theta=categories + [categories[0]],
+                    fill='toself',
+                    name=ticker
+                ))
+                fig.update_layout(polar=dict(radialaxis=dict(visible=True, range=[0, 1])), showlegend=False)
+                st.plotly_chart(fig, use_container_width=True)
+            except Exception as e:
+                st.error(f"Failed to render chart: {e}")
             
             # Expanders for details
             for key, val in pillars.items():

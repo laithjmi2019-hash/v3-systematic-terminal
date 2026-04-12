@@ -77,22 +77,32 @@ def get_quote(ticker: str) -> dict:
     # Fallback to yfinance
     try:
         t = yf.Ticker(ticker)
-        info = t.info
-        price = info.get("currentPrice") or info.get("regularMarketPrice")
-        if not price:
-            hist = t.history(period="1d")
+        price = 0
+        try:
+            hist = t.history(period="1d", timeout=5)
             if not hist.empty:
-                price = hist['Close'].iloc[-1]
-                
+                price = float(hist['Close'].iloc[-1])
+        except:
+            pass
+            
+        info = {}
+        try:
+            info = t.info
+        except:
+            pass
+            
+        if price == 0:
+            price = info.get("currentPrice") or info.get("regularMarketPrice") or 0
+            
         return {
             "ticker": ticker,
-            "price": price or 0,
-            "pe": info.get("trailingPE", 0),
-            "peForward": info.get("forwardPE", 0),
-            "pfcf": info.get("priceToFreeCashFlows", 0)
+            "price": float(price),
+            "pe": info.get("trailingPE", 0) if isinstance(info.get("trailingPE"), (int, float)) else 0,
+            "peForward": info.get("forwardPE", 0) if isinstance(info.get("forwardPE"), (int, float)) else 0,
+            "pfcf": info.get("priceToFreeCashFlows", 0) if isinstance(info.get("priceToFreeCashFlows"), (int, float)) else 0
         }
-    except:
-        return {"ticker": ticker, "price": 0, "pe": 0, "peForward": 0, "pfcf": 0}
+    except Exception as e:
+        return {"ticker": ticker, "price": 0.0, "pe": 0, "peForward": 0, "pfcf": 0}
 
 @st.cache_data(ttl=86400)
 def get_historical_financials(ticker: str, limit: int = 10) -> list:
