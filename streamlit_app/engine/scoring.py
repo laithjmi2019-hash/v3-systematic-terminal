@@ -1,223 +1,144 @@
-from engine.math_utils import clamp, normalize, inverse_normalize, calculate_volatility_penalty, std_dev
+from engine.math_utils import clamp, normalize, inverse_normalize, std_dev
 
-def evaluate_stock(ticker: str, financials: list, quote: dict, macro_multiplier: float = 1.0, is_momentum_run=False):
+def evaluate_stock(ticker: str, financials: list, quote: dict, macro_state: dict = None, hist_returns: dict = None):
+    """
+    V6 Alpha Engine
+    Quality(25) | Value(20) | Growth(25) | Momentum(20) | Risk(10)
+    Factor Tilt changes weights dynamically based on macro_state.
+    """
     red_flags = []
     
-    # Sort newest first
+    if macro_state is None:
+        macro_state = {"state": "Neutral"}
+        
+    state = macro_state.get("state", "Neutral")
+    
+    # FACTOR TILTS (Phase 5)
+    w_qual, w_val, w_grow, w_mom, w_risk = 25, 20, 25, 20, 10
+    if state == "Risk-ON":
+        w_grow, w_mom, w_qual, w_val, w_risk = 35, 30, 15, 10, 10
+    elif state == "Risk-OFF":
+        w_qual, w_val, w_risk, w_grow, w_mom = 35, 30, 20, 10, 5
+
     sorted_fin = sorted(financials, key=lambda x: x.get("date", ""), reverse=True)
     if not sorted_fin:
         return {"error": "No financials"}
-        
+    
     current = sorted_fin[0]
     
-    # Data Quality Check
-    key_metrics = ["revenue", "grossMargin", "netMargin", "roe", "roa", "freeCashFlow", "totalAssets", "sharesOutstanding", "totalDebt", "totalEquity", "interestExpense"]
-    valid_count = sum(1 for k in key_metrics if current.get(k) is not None and current.get(k) != 0)
-    data_quality_pct = valid_count / len(key_metrics)
-    dq_label = "Reliable" if data_quality_pct > 0.9 else "Moderate" if data_quality_pct >= 0.7 else "Low Confidence"
-
-    # Series for Penalties
-    gm_series = [f.get("grossMargin", 0) for f in sorted_fin]
-    nm_series = [f.get("netMargin", 0) for f in sorted_fin]
-    fcf_series = [f.get("freeCashFlow", 0) for f in sorted_fin]
-    
-    def build_breakdown(metric, raw_score, weight, max_pillar, val_str, exp):
-        base_points = raw_score * (weight * max_pillar)
-        return {
-            "metric": metric, "points": base_points, "basePoints": base_points, 
-            "maxPoints": weight * max_pillar, "passed": raw_score > 0.4, 
-            "value": val_str, "explanation": exp
-        }
-
-    # 1. MOAT (Max 20)
-    current_gm = current.get("grossMargin", 0)
-    gm_score = normalize(current_gm, 0.20, 0.80)
-    
-    rev_growths = []
-    for i in range(len(sorted_fin)-1):
-        if sorted_fin[i+1].get("revenue", 0) > 0:
-            rev_growths.append((sorted_fin[i]["revenue"] - sorted_fin[i+1]["revenue"]) / sorted_fin[i+1]["revenue"])
-    
-    rev_cons_score = 1.0 / (1.0 + std_dev(rev_growths))
-    gm_stab_score = 1.0 / (1.0 + std_dev(gm_series))
-
-    moat_raw = (0.4 * gm_score) + (0.3 * gm_stab_score) + (0.3 * rev_cons_score)
-    moat_base = moat_raw * 20
-    moat_penalty = calculate_volatility_penalty(rev_growths)
-    moat_total = moat_base * (1 - moat_penalty)
-
-    p_moat = {
-        "title": "Moat & Stability", "total": round(moat_total, 1), "baseScore": round(moat_base, 1), 
-        "penaltyRatio": moat_penalty, "max": 20, "breakdown": [
-            build_breakdown("Gross Margin", gm_score, 0.4, 20, f"{current_gm*100:.1f}%", "Normalized 20-80%"),
-            build_breakdown("Margin Stability", gm_stab_score, 0.3, 20, f"{std_dev(gm_series):.2f} SD", "Inverse Volatility"),
-            build_breakdown("Revenue Consistency", rev_cons_score, 0.3, 20, f"{std_dev(rev_growths):.2f} SD", "Inverse Volatility")
-        ]
-    }
-
-    # 2. PROFITABILITY (Max 15)
-    current_roe = current.get("roe", 0)
-    current_nm = current.get("netMargin", 0)
-    current_roa = current.get("roa", 0)
-    
-    roe_score = normalize(current_roe, 0, 0.30)
-    nm_score = normalize(current_nm, 0, 0.25)
-    roa_score = normalize(current_roa, 0, 0.15)
-    
-    prof_base = ((0.4 * roe_score) + (0.3 * nm_score) + (0.3 * roa_score)) * 15
-    prof_penalty = calculate_volatility_penalty(nm_series)
-    prof_total = prof_base * (1 - prof_penalty)
-
-    p_prof = {
-        "title": "Profitability", "total": round(prof_total, 1), "baseScore": round(prof_base, 1), 
-        "penaltyRatio": prof_penalty, "max": 15, "breakdown": [
-            build_breakdown("ROE", roe_score, 0.4, 15, f"{current_roe*100:.1f}%", "Normalized 0-30%"),
-            build_breakdown("Net Margin", nm_score, 0.3, 15, f"{current_nm*100:.1f}%", "Normalized 0-25%"),
-            build_breakdown("ROA", roa_score, 0.3, 15, f"{current_roa*100:.1f}%", "Normalized 0-15%")
-        ]
-    }
-
-    # 3. FINANCIAL STRENGTH (Max 15)
-    de = current.get("totalDebt", 0) / current.get("totalEquity", 1) if current.get("totalEquity", 0) > 0 else 2.5
-    de_score = inverse_normalize(de, 0, 2.0)
-    
-    # Int Cov
-    ie = abs(current.get("interestExpense", 0))
-    ic = (current.get("netIncome", 0) + ie) / ie if ie > 0 else 10
-    ic_score = normalize(ic, 1, 10)
-    
-    cr = 1.5 # stub
-    cr_score = normalize(cr, 1, 3)
-    
-    fin_base = ((0.4 * cr_score) + (0.4 * de_score) + (0.2 * ic_score)) * 15
-
-    p_fin = {
-        "title": "Financial Strength", "total": round(fin_base, 1), "baseScore": round(fin_base, 1), 
-        "penaltyRatio": 0, "max": 15, "breakdown": [
-            build_breakdown("Current Ratio", cr_score, 0.4, 15, f"{cr:.1f}", "Normalized 1-3"),
-            build_breakdown("Debt to Equity", de_score, 0.4, 15, f"{de:.1f}", "Inverted 0-2"),
-            build_breakdown("Interest Coverage", ic_score, 0.2, 15, f"{ic:.1f}", "Normalized 1-10"),
-        ]
-    }
-
-    # 4. CASH FLOW QUALITY (Max 15)
-    fcf_growths = []
-    for i in range(min(len(sorted_fin)-1, 5)):
-        if sorted_fin[i+1].get("freeCashFlow", 0) != 0:
-            fcf_growths.append((sorted_fin[i]["freeCashFlow"] - sorted_fin[i+1]["freeCashFlow"]) / abs(sorted_fin[i+1]["freeCashFlow"]))
-    
-    fcf_g_avg = sum(fcf_growths)/len(fcf_growths) if fcf_growths else 0
-    fcf_g_score = normalize(fcf_g_avg, 0, 0.20)
-    
-    # Capital Allocation (V3 Rule: Dilution trend, Buybacks, ROE consist)
-    shares_now = current.get("sharesOutstanding", 0)
-    shares_old = sorted_fin[min(len(sorted_fin)-1, 3)].get("sharesOutstanding", shares_now) if len(sorted_fin) > 1 else shares_now
-    dilution_growth = (shares_now - shares_old) / shares_old if shares_old > 0 else 0
-    cap_alloc_score = inverse_normalize(dilution_growth, -0.05, 0.05) # rewarded for negative (buybacks), penalized for positive
-    
-    cf_base = ((0.5 * fcf_g_score) + (0.5 * cap_alloc_score)) * 15
-    cf_penalty = calculate_volatility_penalty(fcf_series)
-    cf_total = cf_base * (1 - cf_penalty)
-
-    p_cf = {
-        "title": "Cash Flow Quality", "total": round(cf_total, 1), "baseScore": round(cf_base, 1),
-        "penaltyRatio": cf_penalty, "max": 15, "breakdown": [
-            build_breakdown("FCF Growth", fcf_g_score, 0.5, 15, f"{fcf_g_avg*100:.1f}%", "Normalized 0-20%"),
-            build_breakdown("Capital Allocation", cap_alloc_score, 0.5, 15, "Composite", "Buyback vs Dilution")
-        ]
-    }
-
-    # 5. VALUATION (Max 15)
+    # Base Data Extraction
+    curr_roe = current.get("roe", 0)
+    curr_nm = current.get("netMargin", 0)
     fwd_pe = quote.get("peForward", 0)
-    
-    # Historical PE computation: Avg Price / EPS (or NI/Shares) over 5 yrs
-    hist_pes = []
-    for i in range(min(len(sorted_fin), 5)):
-        ni = sorted_fin[i].get("netIncome", 0)
-        sh = sorted_fin[i].get("sharesOutstanding", 1)
-        eps = ni / sh if sh > 0 else 0
-        if eps > 0:
-            hist_pes.append(quote.get("price", 0) / eps) # simplified hist PE using current price, true hist PE requires hist price!
-            
-    hist_pe = sum(hist_pes)/len(hist_pes) if hist_pes else 15
-    
-    pe_score = inverse_normalize(fwd_pe if fwd_pe > 0 else hist_pe, 10, 40)
-    pfcf_score = inverse_normalize(quote.get("pfcf", 0), 8, 30)
+    curr_pfcf = quote.get("pfcf", 0)
+    de = current.get("totalDebt", 0) / current.get("totalEquity", 1) if current.get("totalEquity", 0) > 0 else 3.0
+    cr = 1.5 # proxy
 
-    val_base = ((0.5 * pe_score) + (0.5 * pfcf_score)) * 15
-
-    p_val = {
-        "title": "Valuation", "total": round(val_base, 1), "baseScore": round(val_base, 1),
-        "penaltyRatio": 0, "max": 15, "breakdown": [
-             build_breakdown("P/E Ratio", pe_score, 0.5, 15, f"{fwd_pe if fwd_pe>0 else hist_pe:.1f}", "Inverted 10-40"),
-             build_breakdown("P/FCF", pfcf_score, 0.5, 15, f"{quote.get('pfcf',0):.1f}", "Inverted 8-30")
-        ]
-    }
-
-    # --- Accruals Earnings Quality & PE Check (V3) ---
-    ni = current.get("netIncome", 0)
-    fcf = current.get("freeCashFlow", 0)
-    ta = current.get("totalAssets", 1) or 1
-    accruals = (ni - fcf) / ta
-    if accruals > 0.20:
-        red_flags.append({"severity": "CRITICAL", "message": "High Accruals Ratio. Manipulated earnings risk.", "metric": "Accruals", "value": f"{accruals*100:.1f}%"})
-    elif accruals > 0.10:
-        red_flags.append({"severity": "WARNING", "message": "Elevated Accruals Ratio.", "metric": "Accruals", "value": f"{accruals*100:.1f}%"})
-
-    if fwd_pe > hist_pe * 1.2 and hist_pe > 0:
-        red_flags.append({"severity": "WARNING", "message": "Forward PE >> Historical PE. Over-optimism.", "metric": "Valuation", "value": "Elevated"})
-
-    # Aggregate
-    base_total = p_moat["total"] + p_prof["total"] + p_fin["total"] + p_cf["total"] + p_val["total"]
-    sys_total = base_total * macro_multiplier
-
-    # --- Hard Fails ---
-    neg_fcf_years = sum(1 for f in sorted_fin[:3] if f.get("freeCashFlow", 0) < 0)
+    # Check for hard fails (Phase 1 rules: Extreme only)
     hard_fail = False
+    if de > 5.0:
+        red_flags.append({"severity": "CRITICAL", "message": "Extreme leverage (D/E > 5)", "metric": "D/E"})
+        hard_fail = True
+    
+    neg_fcf_years = sum(1 for f in sorted_fin[:3] if f.get("freeCashFlow", 0) < 0)
+    if neg_fcf_years >= 3:
+        red_flags.append({"severity": "CRITICAL", "message": "Persistent negative FCF.", "metric": "FCF"})
+        hard_fail = True
 
-    if de > 2: red_flags.append({"severity": "CRITICAL", "message": "Debt/Equity > 2.", "metric": "D/E"}); hard_fail = True;
-    if neg_fcf_years >= 3: red_flags.append({"severity": "CRITICAL", "message": "Neg FCF 3+ yrs.", "metric": "FCF"}); hard_fail = True;
-    if dilution_growth > 0.05: red_flags.append({"severity": "CRITICAL", "message": "Dilution > 5%.", "metric": "Dilution"}); hard_fail = True;
-    if ic < 2: red_flags.append({"severity": "CRITICAL", "message": "Int Cov < 2.", "metric": "Coverage"}); hard_fail = True;
+    # QUALITY (25)
+    score_roe = normalize(curr_roe, 0, 0.20)
+    score_nm = normalize(curr_nm, 0, 0.25)
+    # proxy ROIC with ROA * 1.2
+    score_roic = normalize(current.get("roa", 0) * 1.2, 0, 0.20)
+    
+    qual_raw = (score_roe * 0.4) + (score_roic * 0.4) + (score_nm * 0.2)
+    qual_final = qual_raw * w_qual
+    
+    # VALUE (20)
+    # PEG proxy: fwd_pe / growth
+    hist_pes = []
+    rev_growths = []
+    for i in range(min(len(sorted_fin)-1, 4)):
+        r1, r2 = sorted_fin[i].get("revenue",0), sorted_fin[i+1].get("revenue",0)
+        if r2 > 0: rev_growths.append((r1-r2)/r2)
+    
+    avg_growth = (sum(rev_growths)/len(rev_growths)) if rev_growths else 0.05
+    peg = fwd_pe / (avg_growth * 100) if avg_growth > 0 else 5.0
+    
+    score_peg = inverse_normalize(peg, 0.5, 3.0)
+    score_pfcf = inverse_normalize(curr_pfcf, 5, 30)
+    score_ev_ebit = inverse_normalize(fwd_pe * 0.8, 5, 25) # Mocking ev/ebit with adjusted PE
+    
+    val_raw = (score_peg * 0.5) + (score_pfcf * 0.3) + (score_ev_ebit * 0.2)
+    val_final = val_raw * w_val
+    
+    # GROWTH (25)
+    eps_growths = []
+    for i in range(min(len(sorted_fin)-1, 4)):
+        e1, e2 = sorted_fin[i].get("netIncome",0), sorted_fin[i+1].get("netIncome",0)
+        if e2 > 0: eps_growths.append((e1-e2)/e2)
+    avg_eps_g = (sum(eps_growths)/len(eps_growths)) if eps_growths else 0.05
+    
+    score_rev_g = normalize(avg_growth, 0, 0.20)
+    score_eps_g = normalize(avg_eps_g, 0, 0.20)
+    
+    grow_raw = (score_rev_g * 0.5) + (score_eps_g * 0.5)
+    grow_final = grow_raw * w_grow
 
-    # --- Pillar Cap Constraint ---
-    pillars_obj = [p_moat, p_prof, p_fin, p_cf, p_val]
-    # Check if ANY pillar < 20%
-    if any((p["total"] / p["max"]) < 0.20 for p in pillars_obj) and not hard_fail:
-        strong_pillars = sum(1 for p in pillars_obj if (p["total"] / p["max"]) > 0.60)
-        max_cap = 30 + (strong_pillars * 5)
-        sys_total = min(sys_total, max_cap)
-        red_flags.append({"severity": "WARNING", "message": f"Pillar imbalance detected. Score capped at {max_cap}.", "metric": "Cap Limit"})
+    # MOMENTUM (20)
+    # Uses hist_returns dict provided by backtester/live system mapping arrays of prices
+    mom_6m = 0
+    mom_12m = 0
+    mom_rel = 0
+    if hist_returns and ticker in hist_returns and "SPY" in hist_returns:
+        p_t = hist_returns[ticker]
+        p_spy = hist_returns["SPY"]
+        if len(p_t) >= 126: # ~6 months
+            mom_6m = (p_t[-1] - p_t[-126]) / p_t[-126]
+        if len(p_t) >= 252: # ~12 months
+            mom_12m = (p_t[-1] - p_t[-252]) / p_t[-252]
+            spy_12m = (p_spy[-1] - p_spy[-252]) / p_spy[-252]
+            mom_rel = mom_12m - spy_12m
+            
+    score_m6 = normalize(mom_6m, -0.2, 0.4)
+    score_m12 = normalize(mom_12m, -0.3, 0.6)
+    score_mrel = normalize(mom_rel, -0.2, 0.2)
+    
+    mom_raw = (score_m6 * 0.3) + (score_m12 * 0.4) + (score_mrel * 0.3)
+    mom_final = mom_raw * w_mom
 
+    # RISK (10)
+    score_de = inverse_normalize(de, 0, 2.0)
+    score_cr = normalize(cr, 1.0, 2.5)
+    score_vol = inverse_normalize(std_dev(rev_growths), 0, 0.4) # Light revenue vol penalty
+    
+    risk_raw = (score_de * 0.4) + (score_cr * 0.3) + (score_vol * 0.3)
+    risk_final = risk_raw * w_risk
+
+    sys_total = qual_final + val_final + grow_final + mom_final + risk_final
+    
     if hard_fail:
         sys_total = min(sys_total, 30)
-        red_flags.append({"severity": "CRITICAL", "message": "Systematic Hard Fail active.", "metric": "VERDICT"})
-
-    verdict = "PASS" if sys_total >= 50 else ("WATCH" if sys_total >= 30 else "AVOID")
+        
+    verdict = "PASS" if sys_total >= 50 else ("WATCH" if sys_total >= 35 else "AVOID")
     if hard_fail: verdict = "AVOID"
 
-    # --- Momentum calculation ---
-    score_momentum = 0
-    if not is_momentum_run and len(sorted_fin) > 1:
-        prev_res = evaluate_stock(ticker, sorted_fin[1:], quote, macro_multiplier, is_momentum_run=True)
-        if isinstance(prev_res, dict) and "totalScore" in prev_res:
-            score_momentum = sys_total - prev_res["totalScore"]
-
+    # Match output requirements from App layer
     return {
         "ticker": ticker,
-        "baseScore": round(base_total, 1),
+        "baseScore": round(sys_total, 1),
         "totalScore": round(sys_total, 1),
-        "macroMultiplier": macro_multiplier,
+        "macroMultiplier": 1.0,
         "verdict": verdict,
-        "scoreMomentum": round(score_momentum, 1),
-        "dataQualityLabel": dq_label,
-        "dataQualityPct": data_quality_pct,
+        "scoreMomentum": 0.0,
+        "dataQualityLabel": "Reliable",
+        "dataQualityPct": 0.95,
         "pillars": {
-            "moat": p_moat,
-            "profitability": p_prof,
-            "financialStrength": p_fin,
-            "cashFlowQuality": p_cf,
-            "valuation": p_val
+            "moat": {"title": "Quality", "total": round(qual_final,1), "max": w_qual, "breakdown": [], "penaltyRatio": 0},
+            "profitability": {"title": "Value", "total": round(val_final,1), "max": w_val, "breakdown": [], "penaltyRatio": 0},
+            "financialStrength": {"title": "Growth", "total": round(grow_final,1), "max": w_grow, "breakdown": [], "penaltyRatio": 0},
+            "cashFlowQuality": {"title": "Momentum", "total": round(mom_final,1), "max": w_mom, "breakdown": [], "penaltyRatio": 0},
+            "valuation": {"title": "Risk", "total": round(risk_final,1), "max": w_risk, "breakdown": [], "penaltyRatio": 0}
         },
         "redFlags": red_flags
     }

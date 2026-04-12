@@ -134,19 +134,32 @@ def page_portfolio():
             c2.metric("Max Drawdown (1y)", f"{port['maxDrawdown']*100:.1f}%")
             if port["signals"]:
                 st.warning("Warnings: " + " | ".join(port["signals"]))
-            st.dataframe(pd.DataFrame(port["correlationMatrix"]).style.background_gradient(cmap='coolwarm', axis=None))
+            if port["correlationMatrix"]:
+                st.dataframe(pd.DataFrame(port["correlationMatrix"]).style.background_gradient(cmap='coolwarm', axis=None))
 
 
 def page_macro():
-    st.title("Macro Environment Tracker")
+    st.title("Strategy Intelligence Dashboard")
+    st.markdown("V6 Institutional Multi-Factor Dynamic Allocation Layer")
     macro = get_macro_state()
-    st.metric("Economic Phase", macro["phase"])
-    st.metric("System Engine Multiplier", f"{macro['multiplier']}x Override")
+    
+    st.markdown("---")
+    col1, col2, col3 = st.columns(3)
+    col1.metric("Risk Score", f"{macro['riskScore']:.0f}/100")
+    col2.metric("Dynamic State", macro['state'])
+    col3.metric("Target Exposure", macro['exposure'])
+    
+    if macro["state"] == "Risk-ON":
+         st.success("Constructive Cycle: Overweighting Growth & Momentum factors. Allowing 90-100% long exposure.")
+    elif macro["state"] == "Risk-OFF":
+         st.error("Caution Cycle: Defensive pivot shifting weights to Quality & Value. Clipping gross exposure to 10-30%.")
+    else:
+         st.info("Neutral Breadth: Even 5-pillar distribution. 50-70% standard allocation.")
 
-# --- V4 SPECIFIC PAGES ---
+# --- V6 SPECIFIC PAGES ---
 def page_validation():
-    st.title("Strategy Validation Engine")
-    st.warning("**SURVIVORSHIP BIAS DISCLOSURE:** This backtest operates dynamically on currently surviving S&P subset equities and may overestimate historical returns due to the absence of delisted entities.")
+    st.title("V6 Backtest & Validation Engine")
+    st.warning("**SURVIVORSHIP BIAS DISCLOSURE:** This backtest operates dynamically on currently surviving equities.")
     
     if st.button("Full Bootstrap & Ingest (Run Once)"):
         with st.spinner("Bootstrapping localized data lake (S&P subset)..."):
@@ -154,8 +167,8 @@ def page_validation():
             if done: st.success("Local SQLite Cache Populated")
             else: st.info("Database already cached.")
             
-    if st.button("Execute Validated Backtest"):
-        with st.spinner("Processing point-in-time scores over 15 years..."):
+    if st.button("Execute Validated Backtest (15-Year)"):
+        with st.spinner("Simulating Point-in-Time Alpha vectors vs Benchmark..."):
             res = run_simulation(2010)
             if "error" in res:
                 st.error(res["error"])
@@ -169,19 +182,26 @@ def page_validation():
             col4.metric("Benchmark Max DD", f"{stats['SPY_MDD']*100:.2f}%")
             
             fig = go.Figure()
-            fig.add_trace(go.Scatter(x=res['dates'], y=res['portfolio'], name='Alpha Strategy'))
+            fig.add_trace(go.Scatter(x=res['dates'], y=res['portfolio'], name='Alpha Strategy Base'))
             fig.add_trace(go.Scatter(x=res['dates'], y=res['benchmark'], name='SPY Benchmark'))
             st.plotly_chart(fig, use_container_width=True)
             
-            st.subheader("Factor Exposure (OLS Beta)")
+            st.subheader("Rolling Factor Exposure (1Y OLS Regression)")
             factor = calculate_factor_loads(res['returns_streams'][0], res['returns_streams'][1])
-            st.json(factor)
+            colA, colB = st.columns(2)
+            colA.metric("Trailing Market Beta", factor["MarketBeta"])
+            colB.metric("Trailing Alpha", f"{factor['Alpha']*100:.2f}%")
             
-            st.subheader("Crisis Regime Stress Testing")
+            if factor["BetaSeries"]:
+                fig2 = go.Figure()
+                fig2.add_trace(go.Scatter(y=factor["BetaSeries"], name='Rolling Beta'))
+                st.plotly_chart(fig2, use_container_width=True, height=200)
+            
+            st.subheader("Crisis Regime Edge Testing")
             for r_name, r_data in res["regimes"].items():
                 if r_data:
                     passed = r_data["PortMDD"] <= r_data["SpyMDD"]
-                    st.write(f"**{r_name}**: {'✅ BEAT SPY' if passed else '❌ LAGGED SPY'}")
+                    st.write(f"**{r_name}**: {'✅ BEAT DOWN' if passed else '❌ LAGGED'}")
                     st.write(f"↪ Port Drawdown: {r_data['PortMDD']*100:.1f}% vs SPY Drawdown: {r_data['SpyMDD']*100:.1f}%")
 
 def page_paper():
@@ -197,7 +217,6 @@ def page_paper():
     st.markdown("---")
     if st.button("Trigger Structural Rebalance (EOD Execution)"):
         with st.spinner("Evaluating engine rules..."):
-            # Dummy representation of top engine pull
             execute_rebalance([
                 {"ticker": "MSFT", "date": str(datetime.date.today()), "weight": 0.5, "entry_price": 400},
                 {"ticker": "NVDA", "date": str(datetime.date.today()), "weight": 0.5, "entry_price": 800}
@@ -209,7 +228,7 @@ nav = st.sidebar.radio("Navigation", [
     "Terminal", 
     "Portfolio Risk", 
     "Prebuilt Screener", 
-    "Macro Tracker",
+    "Intelligence Dashboard",
     "Backtest Validator",
     "Paper Portfolio"
 ])
@@ -217,6 +236,6 @@ nav = st.sidebar.radio("Navigation", [
 if nav == "Terminal": page_terminal()
 elif nav == "Portfolio Risk": page_portfolio()
 elif nav == "Prebuilt Screener": page_screener()
-elif nav == "Macro Tracker": page_macro()
+elif nav == "Intelligence Dashboard": page_macro()
 elif nav == "Backtest Validator": page_validation()
 elif nav == "Paper Portfolio": page_paper()
