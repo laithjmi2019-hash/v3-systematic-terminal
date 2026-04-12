@@ -55,7 +55,7 @@ def page_terminal():
                 st.error("Engine failure: Could not extract timeline metrics.")
                 return
                 
-            base_result = evaluate_stock(ticker, financials, quote, macro["multiplier"])
+            base_result = evaluate_stock(ticker, financials, quote, macro)
             final_result = calculate_alpha_and_rank(base_result)
             ai = get_ai_insight(final_result)
             
