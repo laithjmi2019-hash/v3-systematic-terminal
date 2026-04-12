@@ -68,7 +68,7 @@ def page_terminal():
                     st.markdown(f"<span style='color:{color}'>Momentum: {final_result['scoreMomentum']:+.1f} pts Y/Y</span>", unsafe_allow_html=True)
             with col2:
                 verdict_color = "red" if final_result["verdict"] == "AVOID" else "green" if final_result["verdict"] == "PASS" else "orange"
-                st.markdown(f"### <div style='text-align: right; color: {verdict_color}'>{final_result['verdict']} : {final_result['totalScore']}/80</div>", unsafe_allow_html=True)
+                st.markdown(f"### <div style='text-align: right; color: {verdict_color}'>{final_result['verdict']} : {final_result['totalScore']}/100</div>", unsafe_allow_html=True)
                 
             st.info(f"Data Quality: {final_result.get('dataQualityLabel')} ({final_result.get('dataQualityPct', 0)*100:.0f}% metrics acquired)")
 
@@ -87,7 +87,7 @@ def page_terminal():
             
             st.markdown("---")
             st.subheader("Pillar Breakdown")
-            categories = ['Moat', 'Profitability', 'Financial Strength', 'Cash Flow', 'Valuation']
+            categories = ['Quality', 'Value', 'Growth', 'Momentum', 'Risk']
             pillars = final_result["pillars"]
             
             r_vals = [
@@ -107,6 +107,15 @@ def page_terminal():
             ))
             fig.update_layout(polar=dict(radialaxis=dict(visible=True, range=[0, 1])), showlegend=False)
             st.plotly_chart(fig, use_container_width=True)
+            
+            # Expanders for details
+            for key, val in pillars.items():
+                with st.expander(f"{val['title']} ({val['total']}/{val['max']} pts)"):
+                    if val.get("breakdown"):
+                        for b in val["breakdown"]:
+                            st.text(f"{b['metric']}: {b['points']:.1f}/{b['maxPoints']} | Data: {b['value']} | Rule: {b['explanation']}")
+                    else:
+                        st.text("V6 Dynamic Factor Calculation active. Detailed logic hidden in macro state.")
 
 
 def page_screener():

@@ -78,9 +78,15 @@ def get_quote(ticker: str) -> dict:
     try:
         t = yf.Ticker(ticker)
         info = t.info
+        price = info.get("currentPrice") or info.get("regularMarketPrice")
+        if not price:
+            hist = t.history(period="1d")
+            if not hist.empty:
+                price = hist['Close'].iloc[-1]
+                
         return {
             "ticker": ticker,
-            "price": info.get("currentPrice", info.get("regularMarketPrice", 0)),
+            "price": price or 0,
             "pe": info.get("trailingPE", 0),
             "peForward": info.get("forwardPE", 0),
             "pfcf": info.get("priceToFreeCashFlows", 0)
