@@ -143,11 +143,20 @@ def evaluate_stock(ticker: str, financials: list, quote: dict,
     val_raw   = score_pe * 0.40 + score_peg * 0.30 + score_pfcf * 0.30
     val_final = val_raw * W_VAL
 
-    # ONE cap layer (only when PE data is real)
+    # V9: Sector-Relative Cap Layer
     if has_pe:
-        if   fwd_pe > 80:  val_final = min(val_final, 6.0)
-        elif fwd_pe > 50:  val_final = min(val_final, 12.0)
-        elif fwd_pe > 35:  val_final = min(val_final, 18.0)
+        SECTOR_PE = {
+            "Technology": 28.0, "Healthcare": 22.0, "Financial Services": 14.0,
+            "Consumer Cyclical": 20.0, "Industrials": 21.0, "Energy": 12.0,
+            "Consumer Defensive": 20.0, "Utilities": 17.0, "Real Estate": 25.0,
+            "Basic Materials": 15.0, "Communication Services": 19.0, "DEFAULT": 20.0
+        }
+        sec_pe = SECTOR_PE.get(quote.get("sector", "DEFAULT"), 20.0)
+        pe_ratio = fwd_pe / sec_pe
+        
+        if   pe_ratio > 3.0:  val_final = min(val_final, 6.0)
+        elif pe_ratio > 2.0:  val_final = min(val_final, 12.0)
+        elif pe_ratio > 1.5:  val_final = min(val_final, 18.0)
 
     val_final = round(max(0.0, val_final), 1)
 
@@ -155,12 +164,13 @@ def evaluate_stock(ticker: str, financials: list, quote: dict,
                  ticker, fwd_pe, curr_pfcf, peg, val_final)
 
     # ==================================================================
-    #  GROWTH  (25)   —   Revenue CAGR + EPS CAGR
+    #  GROWTH  (25)   —   Revenue CAGR + EPS CAGR + Revisions Momentum
     # ==================================================================
     s_rev_g = normalize(avg_rev_g, 0, 0.15)   # 15% = max
     s_eps_g = normalize(avg_eps_g, 0, 0.20)   # 20% = max
+    s_revs  = quote.get("revisions_score", 0.5)
 
-    grow_raw   = s_rev_g * 0.50 + s_eps_g * 0.50
+    grow_raw   = s_rev_g * 0.40 + s_eps_g * 0.40 + s_revs * 0.20
     grow_final = round(grow_raw * W_GROW, 1)
 
     # ==================================================================
@@ -198,14 +208,31 @@ def evaluate_stock(ticker: str, financials: list, quote: dict,
                  ticker, mom_6m, mom_12m, mom_rel, len(p_t))
 
     if has_mom:
-        s_m12 = max(0.0, min(1.0, (mom_12m + 0.20) / 0.75))
-        s_m6  = max(0.0, min(1.0, (mom_6m  + 0.10) / 0.40))
-        s_mrl = max(0.0, min(1.0, (mom_rel + 0.10) / 0.40))
+        import numpy as np
+        
+        # Calculate trailing volatility to penalize erratic returns
+        ann_vol = 0.20
+        if len(p_t) > 126:
+            # We already have oldest-first daily prices
+            arr = np.array(p_t[-252:])
+            daily_returns = np.diff(arr) / arr[:-1]
+            ann_vol = np.std(daily_returns) * np.sqrt(252) if len(daily_returns) > 0 else 0.20
+            ann_vol = max(ann_vol, 0.05) # Prevent divide-by-zero
+        
+        # Risk-adjusted (Sharpe-esque)
+        sharpe_12m = mom_12m / ann_vol
+        sharpe_6m = mom_6m / ann_vol
+        sharpe_rel = mom_rel / ann_vol
+        
+        # Normalize sharpe variants
+        s_m12 = max(0.0, min(1.0, (sharpe_12m + 0.5) / 2.0))
+        s_m6  = max(0.0, min(1.0, (sharpe_6m  + 0.5) / 2.0))
+        s_mrl = max(0.0, min(1.0, (sharpe_rel + 0.5) / 2.0))
 
         mom_raw   = s_m12 * 0.50 + s_m6 * 0.30 + s_mrl * 0.20
         mom_final = mom_raw * W_MOM
 
-        # Hard caps for negative trends
+        # Hard caps for negative trends (still apply the risk gates)
         if mom_12m < 0:
             mom_final = min(mom_final, 8.0)
         if mom_6m < 0 and mom_12m < 0:

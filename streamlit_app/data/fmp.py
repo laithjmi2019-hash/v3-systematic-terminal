@@ -184,8 +184,13 @@ def get_historical_financials(ticker: str, limit: int = 10) -> list:
                 net_income = safe_get(inc, "Net Income")
                 gross_profit = safe_get(inc, "Gross Profit")
                 interest_exp = abs(safe_get(inc, "Interest Expense"))
-                
                 fcf = safe_get(cf, "Free Cash Flow")
+                if fcf == 0.0:
+                    ocf = safe_get(cf, "Operating Cash Flow")
+                    capex = safe_get(cf, "Capital Expenditure")
+                    if ocf != 0.0:
+                        # CapEx is typically reported as negative outflow
+                        fcf = ocf + capex if capex < 0 else ocf - capex
                 
                 total_assets = safe_get(bs, "Total Assets")
                 total_debt = safe_get(bs, "Total Debt")
@@ -259,3 +264,40 @@ def get_historical_prices(ticker: str, days: int = 252) -> list:
         st.cache_data.clear()  # Clear this specific cache entry
         return result
     return result
+
+@st.cache_data(ttl=86400)
+def get_analyst_revisions(ticker: str) -> dict:
+    """
+    V9 Upgrade: Returns Analyst Revisions Momentum.
+    Checks FMP analyst-estimates over the expected quarters to see if EPS est is being revised up.
+    Returns:
+       score (float): 0.0 to 1.0 signal. 0.5 = neutral, >0.5 = upgrades, <0.5 = downgrades
+    """
+    revisions_score = 0.5
+    if not FMP_API_KEY:
+        return {"revisions_score": revisions_score}
+        
+    try:
+        url = f"{BASE_URL}/analyst-estimates/{ticker}?period=quarter&limit=4&apikey={FMP_API_KEY}"
+        res = requests.get(url, timeout=8)
+        if res.status_code == 200 and res.json():
+            data = res.json()
+            if len(data) >= 2:
+                # Naive revision trend: compare estimatedEPSCurrent vs estimatedEPSPrior if available, or just check recent quarters
+                # FMP analyst-estimates has estimatedEps
+                # For a rough revision momentum proxy, we see if upcoming quarters expected EPS > previous expectations
+                # or if estimatedEps itself is strong. Let's use a simple binary indicator for MVP.
+                est1 = data[0].get('estimatedEps', 0) or 0
+                est2 = data[1].get('estimatedEps', 0) or 0
+                if est1 > est2 * 1.05:
+                    revisions_score = 1.0
+                elif est1 > est2:
+                    revisions_score = 0.75
+                elif est1 < est2 * 0.95:
+                    revisions_score = 0.0
+                elif est1 < est2:
+                    revisions_score = 0.25
+    except Exception:
+        pass
+        
+    return {"revisions_score": revisions_score}

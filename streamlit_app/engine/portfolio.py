@@ -2,62 +2,64 @@ import numpy as np
 import pandas as pd
 from engine.math_utils import std_dev
 
-def allocate_capital(scored_stocks: list, max_pos=0.07, min_pos=0.02, sector_cap=0.25) -> list:
+def allocate_capital(scored_stocks: list, max_pos=0.15, min_pos=0.02, sector_cap=0.30) -> list:
     """
-    V6 Portfolio Constructor Engine.
-    Requires list of parsed items: {ticker, score, return_history, sector}
-    Weights ∝ Score / Volatility. Applies Sector and Pos constraints.
+    V9 Mean-Variance Optimization (MVO) Engine.
+    Maximizes Conviction-Adjusted Sharpe Ratio using Modern Portfolio Theory.
     """
-    allocations = []
+    from scipy.optimize import minimize
+    import warnings
+    warnings.filterwarnings("ignore")
     
-    # 1. Calculate Score / Vol
-    raw_weights = []
-    total_raw = 0
-    valid_stocks = []
+    if not scored_stocks:
+        return []
+    
+    n = len(scored_stocks)
+    if n == 1:
+        return [{"ticker": scored_stocks[0]["ticker"], "weight": 1.0}]
+        
+    # Build Returns Matrix
+    min_len = min([len(s.get("return_history", [])) for s in scored_stocks])
+    if min_len < 20: 
+        # Fallback to naive score weighting if history too short
+        total_score = sum([max(s['score'], 1) for s in scored_stocks])
+        return [{"ticker": s["ticker"], "weight": max(s['score'], 1) / total_score} for s in scored_stocks]
+        
+    ret_matrix = []
+    scores = []
     for s in scored_stocks:
-        vol = std_dev(s.get("return_history", []))
-        if vol == 0: vol = 0.05 # floor
-        w = s["score"] / vol
-        raw_weights.append(w)
-        total_raw += w
-        valid_stocks.append(s)
+        ret_matrix.append(s["return_history"][-min_len:])
+        scores.append(s["score"] / 100.0) # V9: Use structural score as forward expected drift
         
-    if total_raw == 0: return []
+    ret_matrix = np.array(ret_matrix)
+    cov_matrix = np.cov(ret_matrix)
+    exp_returns = np.array(scores)
     
-    # 2. Normalize initial
-    initial_weights = [w / total_raw for w in raw_weights]
-    
-    # 3. Apply min/max and sector caps
-    final_weights = [0] * len(initial_weights)
-    sectors_usage = {}
-    
-    # iterative greedy fill
-    remaining_weight = 1.0
-    
-    for i, s in enumerate(valid_stocks):
-        target = min(initial_weights[i], max_pos)
-        target = max(target, min_pos)
+    # Objective: Minimize Negative Sharpe Ratio
+    def objective(weights):
+        port_return = np.dot(weights, exp_returns)
+        port_vol = np.sqrt(np.dot(weights.T, np.dot(cov_matrix, weights)))
+        if port_vol == 0: return 0
+        return - (port_return / port_vol)
         
-        sect = s.get("sector", "Unknown")
-        curr_sect_w = sectors_usage.get(sect, 0)
+    cons = ({'type': 'eq', 'fun': lambda x: np.sum(x) - 1.0})
+    bounds = tuple((min_pos, max_pos) for _ in range(n))
+    initial_w = np.array([1.0/n for _ in range(n)])
+    
+    try:
+        opt_res = minimize(objective, initial_w, method='SLSQP', bounds=bounds, constraints=cons)
+        weights = opt_res.x if opt_res.success else initial_w
+    except:
+        weights = initial_w
         
-        if curr_sect_w + target > sector_cap:
-            target = max(0, sector_cap - curr_sect_w)
-            
-        final_weights[i] = target
-        sectors_usage[sect] = curr_sect_w + target
-
-    # Normalize final sum to map exactly to 1.0 (some rounding gaps might exist)
-    sum_w = sum(final_weights)
-    if sum_w > 0:
-        final_weights = [w / sum_w for w in final_weights]
-        
-    for i, s in enumerate(valid_stocks):
-        if final_weights[i] > 0:
-            allocations.append({
-                "ticker": s["ticker"],
-                "weight": final_weights[i]
-            })
+    # Ensure precision mapping
+    weights = weights / np.sum(weights)
+    
+    allocations = []
+    for i, s in enumerate(scored_stocks):
+        w = float(weights[i])
+        if w > 0.001:
+            allocations.append({"ticker": s["ticker"], "weight": w})
             
     return allocations
 

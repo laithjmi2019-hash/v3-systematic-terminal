@@ -1,7 +1,7 @@
 import streamlit as st
 import pandas as pd
 import plotly.graph_objects as go
-from data.fmp import get_quote, get_historical_financials, resolve_ticker, search_companies
+from data.fmp import get_quote, get_historical_financials, resolve_ticker, search_companies, get_analyst_revisions
 from engine.macro import get_macro_state
 from engine.scoring import evaluate_stock
 from engine.alpha import calculate_alpha_and_rank
@@ -33,6 +33,8 @@ def page_terminal():
             ticker = resolve_ticker(selected_ticker).upper()
             quote = get_quote(ticker)
             financials = get_historical_financials(ticker, 10)
+            revs = get_analyst_revisions(ticker)
+            quote["revisions_score"] = revs.get("revisions_score", 0.5)
 
             # Macro — used only for action downgrade, not scoring weights
             try:
