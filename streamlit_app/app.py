@@ -18,19 +18,37 @@ import datetime
 st.set_page_config(page_title="V4 Institutional Terminal", layout="wide", page_icon="📈")
 
 # ----------- AI STUB -------------
-def get_ai_insight(result: dict) -> dict:
+def get_ai_insight(result: dict, macro_state: dict) -> dict:
     confidence_level = "Medium"
     if result.get("dataQualityPct", 0) > 0.9 and not result.get("redFlags"):
         confidence_level = "High"
     elif result.get("dataQualityPct", 0) < 0.7 or len(result.get("redFlags", [])) > 1:
         confidence_level = "Low"
         
+    score = result.get("totalScore", 0)
+    mom_score = result.get("pillars", {}).get("cashFlowQuality", {}).get("total", 0)
+    
+    level_idx = 0
+    if score > 85 and mom_score > 15:
+        level_idx = 3 # Strong Buy
+    elif score > 75:
+        level_idx = 2 # Accumulate
+    elif score >= 50:
+        level_idx = 1 # Hold
+    else:
+        level_idx = 0 # Avoid
+        
+    if macro_state.get("state", "") == "Risk-OFF":
+        level_idx = max(0, level_idx - 1)
+        
+    actions = ["Avoid", "Hold", "Accumulate", "Strong Buy"]
+        
     return {
         "Verdict": result.get("verdict", "WATCH"),
-        "Reason": "Quantitative metrics dictate precise positioning.",
+        "Reason": "Quantitative metrics evaluated alongside macro regime overlay.",
         "Strengths": ["Stable FCF output" if result.get("totalScore",0) > 40 else "N/A"],
         "Risks": [f.get("message", "N/A") for f in result.get("redFlags", [])] if result.get("redFlags") else ["Volatility exposure"],
-        "Action": "Accumulate" if result.get("verdict") == "PASS" else "Wait/Avoid",
+        "Action": actions[level_idx],
         "ConfidenceLevel": confidence_level
     }
 
@@ -57,7 +75,7 @@ def page_terminal():
                 
             base_result = evaluate_stock(ticker, financials, quote, macro)
             final_result = calculate_alpha_and_rank(base_result)
-            ai = get_ai_insight(final_result)
+            ai = get_ai_insight(final_result, macro)
             
             col1, col2 = st.columns([3, 1])
             with col1:
