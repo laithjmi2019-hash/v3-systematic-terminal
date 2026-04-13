@@ -55,21 +55,40 @@ def evaluate_stock(ticker: str, financials: list, quote: dict, macro_state: dict
     qual_final = qual_raw * w_qual
     
     # VALUE (20)
-    # PEG proxy: fwd_pe / growth
-    hist_pes = []
     rev_growths = []
     for i in range(min(len(sorted_fin)-1, 4)):
         r1, r2 = sorted_fin[i].get("revenue",0), sorted_fin[i+1].get("revenue",0)
         if r2 > 0: rev_growths.append((r1-r2)/r2)
-    
     avg_growth = (sum(rev_growths)/len(rev_growths)) if rev_growths else 0.05
-    peg = fwd_pe / (avg_growth * 100) if avg_growth > 0 else 5.0
     
-    score_peg = inverse_normalize(peg, 0.5, 3.0)
-    score_pfcf = inverse_normalize(curr_pfcf, 5, 30)
-    score_ev_ebit = inverse_normalize(fwd_pe * 0.8, 5, 25) # Mocking ev/ebit with adjusted PE
+    eps_growths_val = []
+    for i in range(min(len(sorted_fin)-1, 4)):
+        e1, e2 = sorted_fin[i].get("netIncome",0), sorted_fin[i+1].get("netIncome",0)
+        if e2 > 0: eps_growths_val.append((e1-e2)/e2)
+    avg_eps_g_val = (sum(eps_growths_val)/len(eps_growths_val)) if eps_growths_val else 0.05
+
+    # Proxy a fundamental structural yield buffer (8%) to protect mature dividend-payers from hyper-growth PEG biases
+    eff_growth = max(avg_growth, avg_eps_g_val, 0.01) * 100 + 8.0 
+    peg = fwd_pe / eff_growth if eff_growth > 0 else 5.0
     
-    val_raw = (score_peg * 0.5) + (score_pfcf * 0.3) + (score_ev_ebit * 0.2)
+    score_peg = inverse_normalize(peg, 0.5, 3.5)
+    score_pfcf = inverse_normalize(curr_pfcf, 5, 45)
+    score_pe = inverse_normalize(fwd_pe, 8, 45)
+    
+    val_raw = (score_peg * 0.40) + (score_pfcf * 0.30) + (score_pe * 0.30)
+    
+    # User Required Constraint 1: Strong Penalty if PE > 30, P/FCF > 25
+    if fwd_pe > 30: val_raw -= 0.15
+    if curr_pfcf > 25: val_raw -= 0.10
+    
+    # User Required Constraint 2: Heavy Penalty if PEG > 2
+    if peg > 2.0: val_raw -= 0.25
+        
+    # User Required Constraint 3: Cap valuation if extreme multiple decoupled from growth
+    if fwd_pe > 25 and eff_growth < 12.0:
+        val_raw = min(val_raw, 0.3)
+        
+    val_raw = max(0.0, min(1.0, val_raw))
     val_final = val_raw * w_val
     
     # GROWTH (25)
