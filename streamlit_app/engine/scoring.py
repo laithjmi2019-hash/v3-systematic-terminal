@@ -86,25 +86,43 @@ def evaluate_stock(ticker: str, financials: list, quote: dict, macro_state: dict
     grow_final = grow_raw * w_grow
 
     # MOMENTUM (20)
-    # Uses hist_returns dict provided by backtester/live system mapping arrays of prices
-    mom_6m = 0
-    mom_12m = 0
-    mom_rel = 0
+    # Uses hist_returns dict provided by backtester, otherwise fetches dynamically for Live Terminal
+    mom_6m, mom_12m, mom_rel = 0.0, 0.0, 0.0
+    
+    p_t = []
+    p_spy = []
+    
     if hist_returns and ticker in hist_returns and "SPY" in hist_returns:
         p_t = hist_returns[ticker]
         p_spy = hist_returns["SPY"]
-        if len(p_t) >= 126: # ~6 months
-            mom_6m = (p_t[-1] - p_t[-126]) / p_t[-126]
-        if len(p_t) >= 252: # ~12 months
-            mom_12m = (p_t[-1] - p_t[-252]) / p_t[-252]
-            spy_12m = (p_spy[-1] - p_spy[-252]) / p_spy[-252]
+    else:
+        # Live trigger fallback
+        from data.fmp import get_historical_prices
+        t_hist = get_historical_prices(ticker, days=252)
+        s_hist = get_historical_prices("SPY", days=252)
+        
+        # Newest first returned from get_historical_prices, so reverse it
+        p_t = [x["close"] for x in t_hist][::-1] if t_hist else []
+        p_spy = [x["close"] for x in s_hist][::-1] if s_hist else []
+
+    if len(p_t) >= 126: # ~6 months
+        mom_6m = (p_t[-1] - p_t[-126]) / p_t[-126]
+    if len(p_t) >= 200: # ~12 months (or max available)
+        idx_12m = min(len(p_t), 252)
+        mom_12m = (p_t[-1] - p_t[-idx_12m]) / p_t[-idx_12m]
+        
+        idx_spy = min(len(p_spy), 252)
+        if idx_spy > 100:
+            spy_12m = (p_spy[-1] - p_spy[-idx_spy]) / p_spy[-idx_spy]
             mom_rel = mom_12m - spy_12m
             
-    score_m6 = normalize(mom_6m, -0.2, 0.4)
-    score_m12 = normalize(mom_12m, -0.3, 0.6)
-    score_mrel = normalize(mom_rel, -0.2, 0.2)
+    # Normalization (Strong positive -> cap 1.0, Negative -> 0)
+    score_m6 = max(0.0, min(1.0, (mom_6m + 0.10) / 0.60))  # Caps perfectly around +50%
+    score_m12 = max(0.0, min(1.0, (mom_12m + 0.10) / 0.80)) # Caps around +70%
+    score_mrel = max(0.0, min(1.0, (mom_rel + 0.10) / 0.40)) # Caps heavily rewarding outperformance
     
-    mom_raw = (score_m6 * 0.3) + (score_m12 * 0.4) + (score_mrel * 0.3)
+    # 40% (6m), 30% (12m), 30% (vs SPY)
+    mom_raw = (score_m6 * 0.40) + (score_m12 * 0.30) + (score_mrel * 0.30)
     mom_final = mom_raw * w_mom
 
     # RISK (10)
