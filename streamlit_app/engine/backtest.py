@@ -145,20 +145,37 @@ def run_simulation(start_year: int = 2010):
                 avail_fin = [f for f in fin_cache[ticker] if (tdt - datetime.datetime.strptime(f['date'], "%Y-%m-%d")).days > 60]
                 
                 if avail_fin:
-                    res = evaluate_stock(ticker, avail_fin, {"price": px_today, "peForward": 15, "pfcf": 15}, risk_profile, hist_returns_cache)
-                    
-                    if res["verdict"] in ["PASS", "WATCH"]:
+                    # Compute real point-in-time valuation (NOT hardcoded)
+                    latest = avail_fin[0]
+                    shares = latest.get("sharesOutstanding", 0) or 0
+                    ni     = latest.get("netIncome", 0) or 0
+                    fcf    = latest.get("freeCashFlow", 0) or 0
+
+                    pt_pe   = 0.0
+                    pt_pfcf = 0.0
+                    if shares > 0 and ni > 0:
+                        eps   = ni / shares
+                        pt_pe = px_today / eps if eps > 0 else 0
+                    if shares > 0 and fcf > 0:
+                        fcf_ps  = fcf / shares
+                        pt_pfcf = px_today / fcf_ps if fcf_ps > 0 else 0
+
+                    bt_quote = {"price": px_today, "peForward": pt_pe, "pfcf": pt_pfcf}
+                    res = evaluate_stock(ticker, avail_fin, bt_quote, risk_profile, hist_returns_cache)
+
+                    action = res.get("action", res.get("verdict", ""))
+                    if action not in ["AVOID"]:
                         # Calculate volatility
                         idx = spy_df[spy_df['date'] == date_str].index[0]
                         start_idx = max(0, idx - 252)
                         tr = hist_returns_cache[ticker][start_idx:idx+1]
                         rets = [(tr[j]-tr[j-1])/tr[j-1] for j in range(1, len(tr))] if len(tr) > 1 else []
-                        
+
                         scored_stocks.append({
-                            "ticker": ticker, 
+                            "ticker": ticker,
                             "score": res["totalScore"],
                             "return_history": rets,
-                            "sector": "Broad" 
+                            "sector": "Broad"
                         })
             
             scored_stocks.sort(key=lambda x: x["score"], reverse=True)
