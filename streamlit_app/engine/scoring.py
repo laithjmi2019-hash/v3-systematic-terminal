@@ -145,11 +145,17 @@ def evaluate_stock(ticker: str, financials: list, quote: dict, macro_state: dict
     mom_final = mom_raw * w_mom
 
     # RISK (10)
-    score_de = inverse_normalize(de, 0, 2.0)
-    score_cr = normalize(cr, 1.0, 2.5)
-    score_vol = inverse_normalize(std_dev(rev_growths), 0, 0.4) # Light revenue vol penalty
+    score_de = inverse_normalize(de, 0, 5.0) # Highly permissive boundary for treasury-stock buyback distortions
+    score_cr = normalize(cr, 0.5, 2.0)
     
-    risk_raw = (score_de * 0.4) + (score_cr * 0.3) + (score_vol * 0.3)
+    eps_vol = std_dev(eps_growths)
+    score_eps_cons = inverse_normalize(eps_vol, 0.05, 1.0) # Earnings Stability (Extremely heavy penalty for boom/bust)
+    
+    rev_vol = std_dev(rev_growths)
+    score_rev_vol = inverse_normalize(rev_vol, 0.05, 0.5) # Softened revenue volatility penalty
+    
+    # 50% Balance Sheet, 40% Earnings Consistency, 10% Volatility
+    risk_raw = (score_de * 0.40) + (score_cr * 0.10) + (score_eps_cons * 0.40) + (score_rev_vol * 0.10)
     risk_final = risk_raw * w_risk
 
     sys_total = qual_final + val_final + grow_final + mom_final + risk_final
