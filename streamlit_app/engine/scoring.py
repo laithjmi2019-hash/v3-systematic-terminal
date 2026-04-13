@@ -105,7 +105,6 @@ def evaluate_stock(ticker: str, financials: list, quote: dict, macro_state: dict
     grow_final = grow_raw * w_grow
 
     # MOMENTUM (20)
-    # Uses hist_returns dict provided by backtester, otherwise fetches dynamically for Live Terminal
     mom_6m, mom_12m, mom_rel = 0.0, 0.0, 0.0
     
     p_t = []
@@ -120,13 +119,16 @@ def evaluate_stock(ticker: str, financials: list, quote: dict, macro_state: dict
         t_hist = get_historical_prices(ticker, days=252)
         s_hist = get_historical_prices("SPY", days=252)
         
-        # Newest first returned from get_historical_prices, so reverse it
-        p_t = [x["close"] for x in t_hist][::-1] if t_hist else []
-        p_spy = [x["close"] for x in s_hist][::-1] if s_hist else []
+        # Guard against inversion by explicitly sorting chronologically (Oldest to Newest)
+        t_hist_sorted = sorted(t_hist, key=lambda x: x["date"]) if t_hist else []
+        s_hist_sorted = sorted(s_hist, key=lambda x: x["date"]) if s_hist else []
+        
+        p_t = [x["close"] for x in t_hist_sorted]
+        p_spy = [x["close"] for x in s_hist_sorted]
 
     if len(p_t) >= 126: # ~6 months
         mom_6m = (p_t[-1] - p_t[-126]) / p_t[-126]
-    if len(p_t) >= 200: # ~12 months (or max available)
+    if len(p_t) >= 200: # ~12 months
         idx_12m = min(len(p_t), 252)
         mom_12m = (p_t[-1] - p_t[-idx_12m]) / p_t[-idx_12m]
         
@@ -135,13 +137,18 @@ def evaluate_stock(ticker: str, financials: list, quote: dict, macro_state: dict
             spy_12m = (p_spy[-1] - p_spy[-idx_spy]) / p_spy[-idx_spy]
             mom_rel = mom_12m - spy_12m
             
-    # Normalization (Strong positive -> cap 1.0, Negative -> 0)
-    score_m6 = max(0.0, min(1.0, (mom_6m + 0.10) / 0.60))  # Caps perfectly around +50%
-    score_m12 = max(0.0, min(1.0, (mom_12m + 0.10) / 0.80)) # Caps around +70%
-    score_mrel = max(0.0, min(1.0, (mom_rel + 0.10) / 0.40)) # Caps heavily rewarding outperformance
+    # CRITICAL RULE: Positive return -> score increases. Negative return -> score decreases. Do not use absolute values.
+    # 0 return mapped to 0.5 center.
+    score_m12 = max(0.0, min(1.0, (mom_12m + 0.3) / 0.8)) # Range: -30% (0.0) to +50% (1.0)
+    score_m6  = max(0.0, min(1.0, (mom_6m + 0.2) / 0.5))  # Range: -20% (0.0) to +30% (1.0)
+    score_mrel = max(0.0, min(1.0, (mom_rel + 0.2) / 0.4)) # Range: -20% (0.0) to +20% (1.0)
     
-    # 40% (6m), 30% (12m), 30% (vs SPY)
-    mom_raw = (score_m6 * 0.40) + (score_m12 * 0.30) + (score_mrel * 0.30)
+    mom_raw = (score_m12 * 0.40) + (score_m6 * 0.30) + (score_mrel * 0.30)
+    
+    # Explicit dual-negative penalty hook (Must be < 8 out of 20 max bounds)
+    if mom_12m < 0 and mom_6m < 0:
+        mom_raw = min(mom_raw, 0.35)
+        
     mom_final = mom_raw * w_mom
 
     # RISK (10)
