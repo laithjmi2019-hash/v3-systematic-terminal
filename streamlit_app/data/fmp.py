@@ -59,50 +59,70 @@ def search_companies(query: str) -> list:
 
 @st.cache_data(ttl=3600)
 def get_quote(ticker: str) -> dict:
+    _empty = {"ticker": ticker, "price": 0.0, "pe": 0, "peForward": 0, "pfcf": 0,
+              "sector": "DEFAULT", "dividendYield": 0.0}
+
+    # --- Primary: FMP ---
     if FMP_API_KEY:
         try:
-            res = requests.get(f"{BASE_URL}/quote/{ticker}?apikey={FMP_API_KEY}")
-            if res.status_code == 200 and len(res.json()) > 0:
+            res = requests.get(f"{BASE_URL}/quote/{ticker}?apikey={FMP_API_KEY}", timeout=8)
+            if res.status_code == 200 and res.json():
                 data = res.json()[0]
-                return {
-                    "ticker": ticker,
-                    "price": data.get("price", 0),
-                    "pe": data.get("pe", 0),
-                    "peForward": data.get("pe", 0), # FMP standard quote doesn't reliably have forward PE, mocking
-                    "pfcf": 0 # Usually pulled from advanced metrics
-                }
-        except:
+                price = float(data.get("price", 0) or 0)
+                if price > 0:
+                    return {
+                        "ticker":        ticker,
+                        "price":         price,
+                        "pe":            float(data.get("pe", 0) or 0),
+                        "peForward":     float(data.get("pe", 0) or 0),
+                        "pfcf":          0.0,
+                        "sector":        "DEFAULT",
+                        "dividendYield": 0.0,
+                    }
+        except Exception:
             pass
 
-    # Fallback to yfinance
+    # --- Secondary: yfinance (full info) ---
     try:
-        t = yf.Ticker(ticker)
-        price = 0
+        t     = yf.Ticker(ticker)
+        info  = {}
+        price = 0.0
+
+        # Price: history is the most reliable source
         try:
-            hist = t.history(period="1d", timeout=5)
+            hist = t.history(period="5d", timeout=8)
             if not hist.empty:
-                price = float(hist['Close'].iloc[-1])
-        except:
+                price = float(hist["Close"].iloc[-1])
+        except Exception:
             pass
-            
-        info = {}
+
+        # Fetch info (may fail on some tickers)
         try:
-            info = t.info
-        except:
-            pass
-            
-        if price == 0:
-            price = info.get("currentPrice") or info.get("regularMarketPrice") or 0
-            
+            info = t.info or {}
+        except Exception:
+            info = {}
+
+        # Secondary price fallback inside info
+        if price == 0.0:
+            for key in ("currentPrice", "regularMarketPrice", "previousClose", "open"):
+                candidate = info.get(key)
+                if candidate and float(candidate) > 0:
+                    price = float(candidate)
+                    break
+
+        div_yield = float(info.get("dividendYield", 0) or 0)
+
         return {
-            "ticker": ticker,
-            "price": float(price),
-            "pe": info.get("trailingPE", 0) if isinstance(info.get("trailingPE"), (int, float)) else 0,
-            "peForward": info.get("forwardPE", 0) if isinstance(info.get("forwardPE"), (int, float)) else 0,
-            "pfcf": info.get("priceToFreeCashFlows", 0) if isinstance(info.get("priceToFreeCashFlows"), (int, float)) else 0
+            "ticker":        ticker,
+            "price":         price,
+            "pe":            float(info.get("trailingPE", 0)           or 0) if isinstance(info.get("trailingPE"),           (int, float)) else 0.0,
+            "peForward":     float(info.get("forwardPE", 0)            or 0) if isinstance(info.get("forwardPE"),            (int, float)) else 0.0,
+            "pfcf":          float(info.get("priceToFreeCashFlows", 0) or 0) if isinstance(info.get("priceToFreeCashFlows"), (int, float)) else 0.0,
+            "sector":        info.get("sector", "DEFAULT") or "DEFAULT",
+            "dividendYield": div_yield,
         }
-    except Exception as e:
-        return {"ticker": ticker, "price": 0.0, "pe": 0, "peForward": 0, "pfcf": 0}
+    except Exception:
+        return _empty
 
 @st.cache_data(ttl=86400)
 def get_historical_financials(ticker: str, limit: int = 10) -> list:

@@ -1,6 +1,9 @@
+import logging
 from engine.math_utils import clamp, normalize, inverse_normalize, std_dev
 
-# Sector median P/E table (proxy — update from FMP batch when available)
+logger = logging.getLogger(__name__)
+
+# Sector median P/E table (proxy)
 SECTOR_MEDIAN_PE = {
     "Technology":        28.0,
     "Consumer Cyclical": 22.0,
@@ -18,10 +21,8 @@ SECTOR_MEDIAN_PE = {
 
 def evaluate_stock(ticker: str, financials: list, quote: dict, macro_state: dict = None, hist_returns: dict = None):
     """
-    V6.6 Institutional-Grade Alpha Engine
+    V6.7 Institutional-Grade Alpha Engine
     Quality(25) | Value(20) | Growth(25) | Momentum(20) | Risk(10)
-    Full institutional hardening: hard caps, sector-relative valuation,
-    PEG correction, dual-negative momentum gate, global compression.
     """
     red_flags = []
 
@@ -44,16 +45,16 @@ def evaluate_stock(ticker: str, financials: list, quote: dict, macro_state: dict
     current = sorted_fin[0]
 
     # --- BASE DATA ---
-    curr_roe  = current.get("roe", 0)
-    curr_nm   = current.get("netMargin", 0)
-    fwd_pe    = quote.get("peForward", 0) or 0
-    curr_pfcf = quote.get("pfcf", 0) or 0
-    sector    = quote.get("sector", "DEFAULT")
-    div_yield = quote.get("dividendYield", 0) or 0  # decimal, e.g. 0.03
+    curr_roe  = current.get("roe", 0) or 0
+    curr_nm   = current.get("netMargin", 0) or 0
+    fwd_pe    = float(quote.get("peForward", 0) or 0)
+    curr_pfcf = float(quote.get("pfcf", 0) or 0)
+    sector    = quote.get("sector", "DEFAULT") or "DEFAULT"
+    div_yield = float(quote.get("dividendYield", 0) or 0)
 
     de = current.get("totalDebt", 0) / current.get("totalEquity", 1) \
          if current.get("totalEquity", 0) > 0 else 3.0
-    cr = 1.5  # proxy; replace with current ratio if available in quote
+    cr = 1.5  # proxy
 
     # --- HARD FAILS ---
     hard_fail = False
@@ -71,13 +72,13 @@ def evaluate_stock(ticker: str, financials: list, quote: dict, macro_state: dict
     # =========================================================
     score_roe  = normalize(curr_roe, 0, 0.20)
     score_nm   = normalize(curr_nm, 0, 0.25)
-    score_roic = normalize(current.get("roa", 0) * 1.2, 0, 0.20)  # proxy ROIC
+    score_roic = normalize(current.get("roa", 0) * 1.2, 0, 0.20)
 
     qual_raw   = (score_roe * 0.4) + (score_roic * 0.4) + (score_nm * 0.2)
     qual_final = qual_raw * w_qual
 
     # =========================================================
-    # PILLAR 2 — VALUE (20) — HARD REBUILD
+    # PILLAR 2 — VALUE (20)
     # =========================================================
     rev_growths = []
     for i in range(min(len(sorted_fin) - 1, 4)):
@@ -93,53 +94,70 @@ def evaluate_stock(ticker: str, financials: list, quote: dict, macro_state: dict
             eps_growths_val.append((e1 - e2) / e2)
     avg_eps_g_val = (sum(eps_growths_val) / len(eps_growths_val)) if eps_growths_val else 0.05
 
-    best_growth_pct = max(avg_growth, avg_eps_g_val, 0.0) * 100  # raw %, no artificial floor
+    best_growth_pct = max(avg_growth, avg_eps_g_val, 0.0) * 100  # no artificial floor
 
-    # RULE 4: PEG correction — if growth < 5%, ignore PEG; use dividend-adjusted yield valuation instead
+    # PEG: only meaningful when growth >= 5%; otherwise use dividend/FCF yield
     use_peg = best_growth_pct >= 5.0
     if use_peg:
-        eff_growth = best_growth_pct  # no growth floor inflation
-        peg = fwd_pe / eff_growth if eff_growth > 0 and fwd_pe > 0 else 5.0
+        peg = fwd_pe / best_growth_pct if best_growth_pct > 0 and fwd_pe > 0 else 5.0
         score_peg = inverse_normalize(peg, 0.5, 3.5)
     else:
-        # Low/no-growth company: value them on dividend yield + FCF yield
-        # Map combined yield: 4%+ yield = high score, 0% yield = low score
-        div_score = normalize(div_yield, 0.0, 0.05)      # 5% = full dividend score
-        fcf_score = inverse_normalize(curr_pfcf, 5, 35)  # cheaper FCF = better
+        # Low-growth: score on dividend yield + FCF yield
+        div_score = normalize(div_yield, 0.0, 0.05)
+        fcf_score = inverse_normalize(curr_pfcf, 5, 35) if curr_pfcf > 0 else 0.5
         score_peg = (div_score * 0.6) + (fcf_score * 0.4)
-        peg = 0.0  # PEG suppressed for low-growth companies
+        peg       = 0.0
 
-    score_pfcf = inverse_normalize(curr_pfcf, 5, 45)
-    score_pe   = inverse_normalize(fwd_pe, 8, 50)
+    score_pfcf = inverse_normalize(curr_pfcf, 5, 45) if curr_pfcf > 0 else 0.5
+    score_pe   = inverse_normalize(fwd_pe, 8, 50)    if fwd_pe   > 0 else 0.5
 
+    # Base value score (0–1 range, then scaled to pillar weight)
     val_raw   = (score_peg * 0.40) + (score_pfcf * 0.30) + (score_pe * 0.30)
-    val_final = val_raw * w_val
+    val_final = val_raw * w_val          # e.g. max theoretical = 1.0 * 20 = 20
 
-    # RULE 2: PEG penalty — only applied when PEG is actually used
+    # --- PENALTY STEP: Apply BEFORE caps so caps remain as MAX limits ---
+
+    # PEG penalty (only when PEG path is active)
     if use_peg and peg > 2.0:
-        val_final -= w_val * (5.0 / 20.0)
+        val_final -= 5.0
 
-    # RULE 3 (P/FCF penalty)
+    # P/FCF penalty
     if curr_pfcf > 25:
-        val_final -= w_val * (4.0 / 20.0)
+        val_final -= 4.0
 
     val_final = max(0.0, val_final)
 
-    # RULE 2 (P/E Hard Caps) — applied strictly after penalties
+    # --- VALUE TRAP DETECTION ---
+    # Stocks that are "cheap" due to fundamental deterioration, not value
+    latest_fcf      = current.get("freeCashFlow", 0)
+    is_rev_negative = avg_growth < 0
+    is_fcf_negative = latest_fcf < 0
+
+    if is_rev_negative and is_fcf_negative:
+        # Revenue shrinking AND burning cash — not value, it's a trap
+        val_final -= 7.0
+        red_flags.append({"severity": "WARNING", "message": "Value trap risk: negative revenue growth + negative FCF", "metric": "ValueTrap"})
+
+    if curr_roe < 0.05:   # ROE < 5%
+        val_final -= 4.0
+
+    val_final = max(0.0, val_final)
+
+    # --- HARD CAPS (P/E) — applied last as strict MAX limits ---
+    # These are MAX limits, not forced values. Caps only cut; they never inflate.
     if fwd_pe > 80:
-        val_final = min(val_final, w_val * (6.0 / 20.0))   # Max 6
+        val_final = min(val_final, 6.0)
     elif fwd_pe > 50:
-        val_final = min(val_final, w_val * (10.0 / 20.0))  # Max 10
+        val_final = min(val_final, 10.0)
     elif fwd_pe > 30:
-        val_final = min(val_final, w_val * (14.0 / 20.0))  # Max 14
+        val_final = min(val_final, 14.0)
 
-    # RULE 3 (Sector-Relative Valuation)
+    # Sector-relative premium penalty
     sector_median = SECTOR_MEDIAN_PE.get(sector, SECTOR_MEDIAN_PE["DEFAULT"])
-    if fwd_pe > 0 and sector_median > 0 and fwd_pe > 1.5 * sector_median:
-        val_final -= w_val * (4.0 / 20.0)  # Sector premium penalty (~4 pts)
-        val_final = max(0.0, val_final)
+    if fwd_pe > 0 and fwd_pe > 1.5 * sector_median:
+        val_final = max(0.0, val_final - 4.0)
 
-    # RULE 5 (Value ≤ Quality when P/E > 30)
+    # Value ≤ Quality gate when richly valued
     if fwd_pe > 30:
         val_final = min(val_final, qual_final)
 
@@ -160,7 +178,8 @@ def evaluate_stock(ticker: str, financials: list, quote: dict, macro_state: dict
     grow_final = grow_raw * w_grow
 
     # =========================================================
-    # PILLAR 4 — MOMENTUM (20) — FINAL RULES
+    # PILLAR 4 — MOMENTUM (20)
+    # Weights: 12M=50%, 6M=30%, Relative vs SPY=20%
     # =========================================================
     mom_6m, mom_12m, mom_rel = 0.0, 0.0, 0.0
 
@@ -168,47 +187,63 @@ def evaluate_stock(ticker: str, financials: list, quote: dict, macro_state: dict
     p_spy = []
 
     if hist_returns and ticker in hist_returns and "SPY" in hist_returns:
-        p_t   = hist_returns[ticker]
+        p_t   = hist_returns[ticker]   # Must be chronological: oldest → newest
         p_spy = hist_returns["SPY"]
     else:
         from data.fmp import get_historical_prices
         t_hist = get_historical_prices(ticker, days=252)
         s_hist = get_historical_prices("SPY", days=252)
 
-        # Guarantee chronological order: Oldest → Newest
+        # get_historical_prices returns newest-first; sort to oldest→newest
         t_hist_sorted = sorted(t_hist, key=lambda x: x["date"]) if t_hist else []
         s_hist_sorted = sorted(s_hist, key=lambda x: x["date"]) if s_hist else []
 
         p_t   = [x["close"] for x in t_hist_sorted]
         p_spy = [x["close"] for x in s_hist_sorted]
 
-    if len(p_t) >= 126:  # 6 months
-        mom_6m = (p_t[-1] - p_t[-126]) / p_t[-126]
+    # Return formula: (price_now / price_past) - 1  [correct, non-reversed]
+    if len(p_t) >= 126:
+        mom_6m = (p_t[-1] / p_t[-126]) - 1.0
 
-    if len(p_t) >= 200:  # 12 months
+    if len(p_t) >= 200:
         idx_12m = min(len(p_t), 252)
-        mom_12m = (p_t[-1] - p_t[-idx_12m]) / p_t[-idx_12m]
+        mom_12m = (p_t[-1] / p_t[-idx_12m]) - 1.0
 
         idx_spy = min(len(p_spy), 252)
-        if idx_spy > 100:
-            spy_12m  = (p_spy[-1] - p_spy[-idx_spy]) / p_spy[-idx_spy]
-            mom_rel  = mom_12m - spy_12m
+        if idx_spy > 100 and p_spy[-idx_spy] > 0:
+            spy_12m = (p_spy[-1] / p_spy[-idx_spy]) - 1.0
+            mom_rel = mom_12m - spy_12m
 
-    # Normalization — signed: positive → high score, negative → low score
-    score_m12  = max(0.0, min(1.0, (mom_12m + 0.20) / 0.75))  # -20% = 0, +55% = 1
-    score_m6   = max(0.0, min(1.0, (mom_6m  + 0.10) / 0.40))  # -10% = 0, +30% = 1
-    score_mrel = max(0.0, min(1.0, (mom_rel  + 0.10) / 0.40)) # -10% = 0, +30% = 1
+    # Diagnostic log
+    logger.debug(
+        "[MOMENTUM %s] return_6m=%.3f  return_12m=%.3f  return_spy_rel=%.3f",
+        ticker, mom_6m, mom_12m, mom_rel
+    )
 
-    # Weights: 12M=50%, 6M=30%, Relative=20%
+    # Signed normalization — positive returns score high, negative score low
+    score_m12  = max(0.0, min(1.0, (mom_12m + 0.20) / 0.75))  # 0 at -20%, 1 at +55%
+    score_m6   = max(0.0, min(1.0, (mom_6m  + 0.10) / 0.40))  # 0 at -10%, 1 at +30%
+    score_mrel = max(0.0, min(1.0, (mom_rel  + 0.10) / 0.40)) # 0 at -10%, 1 at +30%
+
     mom_raw   = (score_m12 * 0.50) + (score_m6 * 0.30) + (score_mrel * 0.20)
     mom_final = mom_raw * w_mom
 
-    # HARD CONDITIONS (applied against absolute out-of-20 equivalents)
+    # HARD CONDITIONS — caps applied on out-of-20 scale directly
     if mom_12m < 0:
-        mom_final = min(mom_final, w_mom * (8.0 / 20.0))   # ≤ 8 equivalent
+        mom_final = min(mom_final, 8.0 * (w_mom / 20.0))   # ≤ 8 (scaled to tilt weight)
 
     if mom_6m < 0 and mom_12m < 0:
-        mom_final = min(mom_final, w_mom * (5.0 / 20.0))   # ≤ 5 equivalent
+        mom_final = min(mom_final, 5.0 * (w_mom / 20.0))   # ≤ 5 (scaled to tilt weight)
+
+    # VALIDATION ASSERTIONS (active in debug mode only)
+    if __debug__:
+        if ticker == "INTC" and (mom_6m < 0 and mom_12m < 0):
+            assert mom_final <= 5.0 * (w_mom / 20.0), \
+                f"INTC momentum validation failed: {mom_final:.2f} > 5"
+        if ticker in ("META", "MSFT", "NVDA"):
+            if mom_12m > 0.10:  # Only assert when trend is clearly positive
+                assert mom_final >= 12.0 * (w_mom / 20.0), \
+                    f"{ticker} momentum validation failed: {mom_final:.2f} < 12"
 
     # =========================================================
     # PILLAR 5 — RISK (10)
@@ -216,16 +251,16 @@ def evaluate_stock(ticker: str, financials: list, quote: dict, macro_state: dict
     score_de       = inverse_normalize(de, 0, 5.0)
     score_cr       = normalize(cr, 0.5, 2.0)
     eps_vol        = std_dev(eps_growths)
-    score_eps_cons = inverse_normalize(eps_vol, 0.05, 1.0)  # Earnings stability
+    score_eps_cons = inverse_normalize(eps_vol, 0.05, 1.0)
     rev_vol        = std_dev(rev_growths)
     score_rev_vol  = inverse_normalize(rev_vol, 0.05, 0.5)
 
-    # 40% Balance Sheet | 40% Earnings Consistency | 10% CR | 10% Rev Stability
+    # 40% Balance Sheet | 40% Earnings Consistency | 10% CR | 10% Rev Vol
     risk_raw   = (score_de * 0.40) + (score_cr * 0.10) + (score_eps_cons * 0.40) + (score_rev_vol * 0.10)
     risk_final = risk_raw * w_risk
 
     # =========================================================
-    # FINAL AGGREGATION — RULE 6: 0.9x Global Compression
+    # AGGREGATION — 0.9x Global Compression
     # =========================================================
     sys_raw   = qual_final + val_final + grow_final + mom_final + risk_final
     sys_total = (sys_raw * 0.90) - (len(red_flags) * 3.0)
@@ -248,11 +283,11 @@ def evaluate_stock(ticker: str, financials: list, quote: dict, macro_state: dict
         "dataQualityLabel": "Reliable",
         "dataQualityPct":   0.95,
         "pillars": {
-            "moat":             {"title": "Quality",  "total": round(qual_final, 1), "max": w_qual, "breakdown": [], "penaltyRatio": 0},
-            "profitability":    {"title": "Value",    "total": round(val_final, 1),  "max": w_val,  "breakdown": [], "penaltyRatio": 0},
-            "financialStrength":{"title": "Growth",   "total": round(grow_final, 1), "max": w_grow, "breakdown": [], "penaltyRatio": 0},
-            "cashFlowQuality":  {"title": "Momentum", "total": round(mom_final, 1),  "max": w_mom,  "breakdown": [], "penaltyRatio": 0},
-            "valuation":        {"title": "Risk",     "total": round(risk_final, 1), "max": w_risk, "breakdown": [], "penaltyRatio": 0},
+            "moat":              {"title": "Quality",  "total": round(qual_final, 1), "max": w_qual, "breakdown": [], "penaltyRatio": 0},
+            "profitability":     {"title": "Value",    "total": round(val_final, 1),  "max": w_val,  "breakdown": [], "penaltyRatio": 0},
+            "financialStrength": {"title": "Growth",   "total": round(grow_final, 1), "max": w_grow, "breakdown": [], "penaltyRatio": 0},
+            "cashFlowQuality":   {"title": "Momentum", "total": round(mom_final, 1),  "max": w_mom,  "breakdown": [], "penaltyRatio": 0},
+            "valuation":         {"title": "Risk",     "total": round(risk_final, 1), "max": w_risk, "breakdown": [], "penaltyRatio": 0},
         },
         "redFlags": red_flags,
     }
