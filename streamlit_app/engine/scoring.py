@@ -76,20 +76,27 @@ def evaluate_stock(ticker: str, financials: list, quote: dict, macro_state: dict
     score_pe = inverse_normalize(fwd_pe, 8, 45)
     
     val_raw = (score_peg * 0.40) + (score_pfcf * 0.30) + (score_pe * 0.30)
-    
-    # User Required Constraint 1: Strong Penalty if PE > 30, P/FCF > 25
-    if fwd_pe > 30: val_raw -= 0.15
-    if curr_pfcf > 25: val_raw -= 0.10
-    
-    # User Required Constraint 2: Heavy Penalty if PEG > 2
-    if peg > 2.0: val_raw -= 0.25
-        
-    # User Required Constraint 3: Cap valuation if extreme multiple decoupled from growth
-    if fwd_pe > 25 and eff_growth < 12.0:
-        val_raw = min(val_raw, 0.3)
-        
-    val_raw = max(0.0, min(1.0, val_raw))
     val_final = val_raw * w_val
+    
+    # RULE 2: PEG Penalty (Subtract 5 points equivalent)
+    if peg > 2.0:
+        val_final -= w_val * (5.0 / 20.0)
+        
+    # RULE 3: P/FCF Penalty (Subtract 4 points equivalent)
+    if curr_pfcf > 25:
+        val_final -= w_val * (4.0 / 20.0)
+        
+    val_final = max(0.0, val_final)
+    
+    # RULE 1: P/E Caps
+    if fwd_pe > 50:
+        val_final = min(val_final, w_val * (10.0 / 20.0)) # Max 10 equivalent
+    elif fwd_pe > 30:
+        val_final = min(val_final, w_val * (14.0 / 20.0)) # Max 14 equivalent
+        
+    # RULE 4: Value MUST NOT exceed Quality if P/E > 30
+    if fwd_pe > 30:
+        val_final = min(val_final, qual_final)
     
     # GROWTH (25)
     eps_growths = []
