@@ -172,7 +172,11 @@ def evaluate_stock(ticker: str, financials: list, quote: dict, macro_state: dict
     risk_raw = (score_de * 0.40) + (score_cr * 0.10) + (score_eps_cons * 0.40) + (score_rev_vol * 0.10)
     risk_final = risk_raw * w_risk
 
-    sys_total = qual_final + val_final + grow_final + mom_final + risk_final
+    sys_raw = qual_final + val_final + grow_final + mom_final + risk_final
+    
+    # SYSTEMIC COMPRESSION: Combat Score Inflation (Max Theoretical ~90, Top Decile > 85)
+    # Deduct structural penalty points per generated red_flag
+    sys_total = (sys_raw * 0.90) - (len(red_flags) * 3.0)
     
     if hard_fail:
         sys_total = min(sys_total, 30)
