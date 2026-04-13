@@ -235,15 +235,13 @@ def evaluate_stock(ticker: str, financials: list, quote: dict, macro_state: dict
     if mom_6m < 0 and mom_12m < 0:
         mom_final = min(mom_final, 5.0 * (w_mom / 20.0))   # ≤ 5 (scaled to tilt weight)
 
-    # VALIDATION ASSERTIONS (active in debug mode only)
-    if __debug__:
-        if ticker == "INTC" and (mom_6m < 0 and mom_12m < 0):
-            assert mom_final <= 5.0 * (w_mom / 20.0), \
-                f"INTC momentum validation failed: {mom_final:.2f} > 5"
-        if ticker in ("META", "MSFT", "NVDA"):
-            if mom_12m > 0.10:  # Only assert when trend is clearly positive
-                assert mom_final >= 12.0 * (w_mom / 20.0), \
-                    f"{ticker} momentum validation failed: {mom_final:.2f} < 12"
+    # Validation logging (non-fatal — never crash production)
+    _exp_max = 5.0 * (w_mom / 20.0)
+    if ticker == "INTC" and mom_6m < 0 and mom_12m < 0 and mom_final > _exp_max:
+        logger.warning("[VALIDATION] INTC momentum %.2f exceeds expected cap %.2f", mom_final, _exp_max)
+    _exp_min = 12.0 * (w_mom / 20.0)
+    if ticker in ("META", "MSFT", "NVDA") and mom_12m > 0.10 and mom_final < _exp_min:
+        logger.warning("[VALIDATION] %s momentum %.2f below expected floor %.2f", ticker, mom_final, _exp_min)
 
     # =========================================================
     # PILLAR 5 — RISK (10)
