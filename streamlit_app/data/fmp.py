@@ -47,7 +47,7 @@ def search_companies(query: str) -> list:
         data = res.json()
         if 'quotes' in data:
             results = []
-            for item in data['quotes'][:7]: # limit to top 7 drops
+            for item in data['quotes'][:7]:
                 sym = item.get('symbol', '')
                 name = item.get('shortname', sym)
                 if sym:
@@ -59,43 +59,31 @@ def search_companies(query: str) -> list:
 
 @st.cache_data(ttl=3600)
 def get_quote(ticker: str) -> dict:
-    _empty = {"ticker": ticker, "price": 0.0, "pe": 0, "peForward": 0, "pfcf": 0,
-              "sector": "DEFAULT", "dividendYield": 0.0}
+    """
+    Primary: yfinance (gives FULL data: forwardPE, pfcf, sector, dividendYield).
+    Fallback: FMP for price only if yfinance price fails.
+    """
+    _empty = {"ticker": ticker, "price": 0.0, "pe": 0.0, "peForward": 0.0,
+              "pfcf": 0.0, "sector": "DEFAULT", "dividendYield": 0.0}
 
-    # --- Primary: FMP ---
-    if FMP_API_KEY:
-        try:
-            res = requests.get(f"{BASE_URL}/quote/{ticker}?apikey={FMP_API_KEY}", timeout=8)
-            if res.status_code == 200 and res.json():
-                data = res.json()[0]
-                price = float(data.get("price", 0) or 0)
-                if price > 0:
-                    return {
-                        "ticker":        ticker,
-                        "price":         price,
-                        "pe":            float(data.get("pe", 0) or 0),
-                        "peForward":     float(data.get("pe", 0) or 0),
-                        "pfcf":          0.0,
-                        "sector":        "DEFAULT",
-                        "dividendYield": 0.0,
-                    }
-        except Exception:
-            pass
+    price     = 0.0
+    fwd_pe    = 0.0
+    trail_pe  = 0.0
+    pfcf      = 0.0
+    sector    = "DEFAULT"
+    div_yield = 0.0
 
-    # --- Secondary: yfinance ---
+    # --- STEP 1: yfinance (always attempt — richest data source) ---
     try:
-        t     = yf.Ticker(ticker)
-        info  = {}
-        price = 0.0
+        t = yf.Ticker(ticker)
 
-        # Attempt 1: fast_info (lightweight, no timeout issue)
+        # Price: try fast_info first, then history, then info keys
         try:
             fi = t.fast_info
             price = float(fi.last_price or 0)
         except Exception:
             pass
 
-        # Attempt 2: history without timeout param (some yf versions don't support it)
         if price == 0.0:
             try:
                 hist = t.history(period="5d")
@@ -104,32 +92,61 @@ def get_quote(ticker: str) -> dict:
             except Exception:
                 pass
 
-        # Attempt 3: t.info dict keys
+        # Full info for fundamentals
+        info = {}
         try:
             info = t.info or {}
         except Exception:
             info = {}
 
+        # Price fallback from info
         if price == 0.0:
             for key in ("currentPrice", "regularMarketPrice", "previousClose", "open"):
                 candidate = info.get(key)
-                if candidate and float(candidate) > 0:
+                if candidate and isinstance(candidate, (int, float)) and float(candidate) > 0:
                     price = float(candidate)
                     break
 
+        # Extract fundamentals
+        if isinstance(info.get("forwardPE"), (int, float)):
+            fwd_pe = float(info["forwardPE"])
+        if isinstance(info.get("trailingPE"), (int, float)):
+            trail_pe = float(info["trailingPE"])
+        if isinstance(info.get("priceToFreeCashFlows"), (int, float)):
+            pfcf = float(info["priceToFreeCashFlows"])
+        
+        sector    = info.get("sector", "DEFAULT") or "DEFAULT"
         div_yield = float(info.get("dividendYield", 0) or 0)
 
-        return {
-            "ticker":        ticker,
-            "price":         price,
-            "pe":            float(info.get("trailingPE", 0)           or 0) if isinstance(info.get("trailingPE"),           (int, float)) else 0.0,
-            "peForward":     float(info.get("forwardPE", 0)            or 0) if isinstance(info.get("forwardPE"),            (int, float)) else 0.0,
-            "pfcf":          float(info.get("priceToFreeCashFlows", 0) or 0) if isinstance(info.get("priceToFreeCashFlows"), (int, float)) else 0.0,
-            "sector":        info.get("sector", "DEFAULT") or "DEFAULT",
-            "dividendYield": div_yield,
-        }
     except Exception:
-        return _empty
+        pass
+
+    # --- STEP 2: FMP fallback for price only ---
+    if price == 0.0 and FMP_API_KEY:
+        try:
+            res = requests.get(f"{BASE_URL}/quote/{ticker}?apikey={FMP_API_KEY}", timeout=8)
+            if res.status_code == 200 and res.json():
+                data = res.json()[0]
+                price = float(data.get("price", 0) or 0)
+                # Also grab trailing PE from FMP if yfinance gave us nothing
+                if trail_pe == 0.0:
+                    trail_pe = float(data.get("pe", 0) or 0)
+        except Exception:
+            pass
+
+    # If we have trailing PE but no forward PE, use trailing as proxy
+    if fwd_pe == 0.0 and trail_pe > 0:
+        fwd_pe = trail_pe
+
+    return {
+        "ticker":        ticker,
+        "price":         price,
+        "pe":            trail_pe,
+        "peForward":     fwd_pe,
+        "pfcf":          pfcf,
+        "sector":        sector,
+        "dividendYield": div_yield,
+    }
 
 @st.cache_data(ttl=86400)
 def get_historical_financials(ticker: str, limit: int = 10) -> list:
@@ -209,11 +226,10 @@ def get_company_profile(ticker: str) -> dict:
     except:
         return {"sector": "Unknown", "industry": "Unknown"}
 
-@st.cache_data(ttl=3600)
-def get_historical_prices(ticker: str, days: int = 252) -> list:
+def _fetch_historical_prices_raw(ticker: str) -> list:
+    """Internal helper — NOT cached. Returns oldest-first list of {date, close}."""
     try:
         t = yf.Ticker(ticker)
-        # 252 trading days is about 1 year, we grab recent 252
         data = t.history(period="1y")
         if data.empty:
             return []
@@ -222,8 +238,24 @@ def get_historical_prices(ticker: str, days: int = 252) -> list:
         for index, row in data.iterrows():
             prices.append({
                 "date": str(index)[:10],
-                "close": row["Close"]
+                "close": float(row["Close"])
             })
-        return prices[::-1] # Newest first to match JS pattern
+        # Sort chronologically: oldest first
+        prices.sort(key=lambda x: x["date"])
+        return prices
     except:
         return []
+
+@st.cache_data(ttl=3600)
+def get_historical_prices(ticker: str, days: int = 252) -> list:
+    """
+    Returns price history. Cached for 1 hour (NOT 24h — prevents stale empty caching).
+    Returns oldest-first order for momentum calculations.
+    """
+    result = _fetch_historical_prices_raw(ticker)
+    # If we got fewer than 50 data points, this is likely a failure — DON'T cache it
+    # by returning through a non-cached path
+    if len(result) < 50:
+        st.cache_data.clear()  # Clear this specific cache entry
+        return result
+    return result
