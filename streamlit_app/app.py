@@ -79,7 +79,11 @@ def page_terminal():
             
             col1, col2 = st.columns([3, 1])
             with col1:
-                st.markdown(f"## {ticker} - ${quote.get('price', 0):.2f}")
+                price = quote.get("price", 0)
+                price_str = f"${price:,.2f}" if price and price > 0 else "Price N/A"
+                sector_lbl = quote.get("sector", "")
+                sector_txt = f" · {sector_lbl}" if sector_lbl and sector_lbl != "DEFAULT" else ""
+                st.markdown(f"## {ticker} — {price_str}{sector_txt}")
                 st.caption(f"Alpha Ranking: **{final_result.get('alphaRankingStr')}** (Score: {final_result.get('alphaScore')}/100)")
                 if final_result.get("scoreMomentum") != 0:
                     color = "green" if final_result["scoreMomentum"] > 0 else "red"
@@ -87,6 +91,10 @@ def page_terminal():
             with col2:
                 verdict_color = "red" if final_result["verdict"] == "AVOID" else "green" if final_result["verdict"] == "PASS" else "orange"
                 st.markdown(f"### <div style='text-align: right; color: {verdict_color}'>{final_result['verdict']} : {final_result['totalScore']}/100</div>", unsafe_allow_html=True)
+                ai_action = ai.get("Action", "")
+                action_color = {"Strong Buy": "green", "Accumulate": "limegreen", "Hold": "orange", "Avoid": "red"}.get(ai_action, "gray")
+                st.markdown(f"<div style='text-align:right;color:{action_color};font-size:1.1em;font-weight:600'>{ai_action}</div>", unsafe_allow_html=True)
+
                 
             st.info(f"Data Quality: {final_result.get('dataQualityLabel')} ({final_result.get('dataQualityPct', 0)*100:.0f}% metrics acquired)")
 

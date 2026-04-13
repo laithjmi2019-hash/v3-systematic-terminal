@@ -82,27 +82,34 @@ def get_quote(ticker: str) -> dict:
         except Exception:
             pass
 
-    # --- Secondary: yfinance (full info) ---
+    # --- Secondary: yfinance ---
     try:
         t     = yf.Ticker(ticker)
         info  = {}
         price = 0.0
 
-        # Price: history is the most reliable source
+        # Attempt 1: fast_info (lightweight, no timeout issue)
         try:
-            hist = t.history(period="5d", timeout=8)
-            if not hist.empty:
-                price = float(hist["Close"].iloc[-1])
+            fi = t.fast_info
+            price = float(fi.last_price or 0)
         except Exception:
             pass
 
-        # Fetch info (may fail on some tickers)
+        # Attempt 2: history without timeout param (some yf versions don't support it)
+        if price == 0.0:
+            try:
+                hist = t.history(period="5d")
+                if not hist.empty:
+                    price = float(hist["Close"].iloc[-1])
+            except Exception:
+                pass
+
+        # Attempt 3: t.info dict keys
         try:
             info = t.info or {}
         except Exception:
             info = {}
 
-        # Secondary price fallback inside info
         if price == 0.0:
             for key in ("currentPrice", "regularMarketPrice", "previousClose", "open"):
                 candidate = info.get(key)
