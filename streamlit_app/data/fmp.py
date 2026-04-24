@@ -5,7 +5,7 @@ import os
 import pandas as pd
 from datetime import datetime, timedelta
 
-FMP_API_KEY = os.environ.get("FMP_API_KEY", "")
+FMP_API_KEY = os.environ.get("FMP_API_KEY", "ZopJDkQbPkxpeehQrJtxGAQRVWJnkiop")
 BASE_URL = "https://financialmodelingprep.com/api/v3"
 
 @st.cache_data(ttl=86400)
@@ -301,3 +301,29 @@ def get_analyst_revisions(ticker: str) -> dict:
         pass
         
     return {"revisions_score": revisions_score}
+
+@st.cache_data(ttl=86400)
+def get_financial_growth(ticker: str) -> dict:
+    if not FMP_API_KEY:
+        return {}
+    try:
+        url = f"{BASE_URL}/financial-growth/{ticker}?limit=1&apikey={FMP_API_KEY}"
+        res = requests.get(url, timeout=8)
+        if res.status_code == 200 and res.json():
+            return res.json()[0]
+    except Exception:
+        pass
+    return {}
+
+@st.cache_data(ttl=86400)
+def get_key_metrics(ticker: str) -> dict:
+    if not FMP_API_KEY:
+        return {}
+    try:
+        url = f"{BASE_URL}/key-metrics-ttm/{ticker}?apikey={FMP_API_KEY}"
+        res = requests.get(url, timeout=8)
+        if res.status_code == 200 and res.json():
+            return res.json()[0]
+    except Exception:
+        pass
+    return {}

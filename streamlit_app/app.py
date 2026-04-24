@@ -31,10 +31,12 @@ def page_terminal():
     if selected_ticker:
         with st.spinner(f"Fetching fundamentals for {selected_ticker}..."):
             ticker = resolve_ticker(selected_ticker).upper()
+            
+            from data.fmp import get_financial_growth, get_key_metrics
+            
             quote = get_quote(ticker)
-            financials = get_historical_financials(ticker, 10)
-            revs = get_analyst_revisions(ticker)
-            quote["revisions_score"] = revs.get("revisions_score", 0.5)
+            growth = get_financial_growth(ticker)
+            metrics = get_key_metrics(ticker)
 
             # Macro — used only for action downgrade, not scoring weights
             try:
@@ -42,11 +44,7 @@ def page_terminal():
             except Exception:
                 macro = {"state": "Neutral"}
 
-            if not financials:
-                st.error("Engine failure: Could not extract timeline metrics.")
-                return
-
-            base_result = evaluate_stock(ticker, financials, quote, macro)
+            base_result = evaluate_stock(ticker, quote, growth, metrics, macro)
 
             if "error" in base_result:
                 st.error(f"Scoring error: {base_result['error']}")
@@ -67,14 +65,14 @@ def page_terminal():
             with col2:
                 action = result.get("action", result.get("verdict", ""))
                 action_colors = {
-                    "STRONG BUY": "#00c853", "ACCUMULATE": "#64dd17",
+                    "STRONG BUY": "#00c853", "BUY": "#64dd17", "ACCUMULATE": "#64dd17",
                     "HOLD": "#ff9100", "WATCH": "#ff6d00", "AVOID": "#d50000"
                 }
                 color = action_colors.get(action, "gray")
                 st.markdown(
                     f"<div style='text-align:right'>"
                     f"<span style='color:{color};font-size:1.6em;font-weight:700'>{action}</span><br>"
-                    f"<span style='font-size:1.3em;font-weight:600'>{result['totalScore']}/100</span>"
+                    f"<span style='font-size:1.3em;font-weight:600'>{result['totalScore']}/150</span>"
                     f"</div>",
                     unsafe_allow_html=True
                 )
@@ -97,8 +95,8 @@ def page_terminal():
             st.subheader("Pillar Breakdown")
             pillars = result["pillars"]
 
-            categories = ["Quality", "Value", "Growth", "Momentum"]
-            pillar_keys = ["moat", "profitability", "financialStrength", "cashFlowQuality"]
+            categories = ["Growth", "Value", "Stability", "Profitability", "Dividend"]
+            pillar_keys = ["growth", "value", "stability", "profitability", "dividend"]
             r_vals = []
             for k in pillar_keys:
                 p = pillars.get(k, {})

@@ -1,47 +1,42 @@
-// FMP API Client stub
-const FMP_API_KEY = process.env.FMP_API_KEY;
+const FMP_API_KEY = process.env.FMP_API_KEY || "ZopJDkQbPkxpeehQrJtxGAQRVWJnkiop";
 const BASE_URL = "https://financialmodelingprep.com/api/v3";
 
 export async function getQuote(ticker: string) {
-  if (!FMP_API_KEY) return mockQuote(ticker);
-  
-  const res = await fetch(`${BASE_URL}/quote/${ticker}?apikey=${FMP_API_KEY}`);
+  const res = await fetch(`${BASE_URL}/quote/${ticker}?apikey=${FMP_API_KEY}`, { cache: 'no-store' });
   if (!res.ok) throw new Error("Failed to fetch quote");
   const data = await res.json();
-  return data[0]; // Needs mapping to our Quote type
+  return data[0] || {}; 
 }
 
+export async function getFinancialGrowth(ticker: string) {
+  const res = await fetch(`${BASE_URL}/financial-growth/${ticker}?limit=1&apikey=${FMP_API_KEY}`, { cache: 'no-store' });
+  if (!res.ok) throw new Error("Failed to fetch financial growth");
+  const data = await res.json();
+  return data[0] || {};
+}
+
+export async function getKeyMetrics(ticker: string) {
+  const res = await fetch(`${BASE_URL}/key-metrics-ttm/${ticker}?apikey=${FMP_API_KEY}`, { cache: 'no-store' });
+  if (!res.ok) throw new Error("Failed to fetch key metrics");
+  const data = await res.json();
+  return data[0] || {};
+}
+
+export async function getCompanyProfile(ticker: string) {
+  const res = await fetch(`${BASE_URL}/profile/${ticker}?apikey=${FMP_API_KEY}`, { cache: 'no-store' });
+  if (!res.ok) throw new Error("Failed to fetch profile");
+  const data = await res.json();
+  return data[0] || {};
+}
+
+// Keep stubs for backwards compatibility if needed elsewhere
 export async function getHistoricalFinancials(ticker: string, limit: number = 10) {
-  if (!FMP_API_KEY) return mockFinancials(ticker);
-  // Full impl missing for brevity
   return [];
 }
 
 export async function getHistoricalPrices(ticker: string, days: number = 252) {
-  if (!FMP_API_KEY) return mockPrices(ticker, days);
-  
-  // daily chart
-  const res = await fetch(`${BASE_URL}/historical-price-full/${ticker}?timeseries=${days}&apikey=${FMP_API_KEY}`);
-  if (!res.ok) throw new Error("Failed to fetch historical prices");
+  const res = await fetch(`${BASE_URL}/historical-price-full/${ticker}?timeseries=${days}&apikey=${FMP_API_KEY}`, { cache: 'no-store' });
+  if (!res.ok) return [];
   const data = await res.json();
   return data.historical || [];
-}
-
-export async function getCompanyProfile(ticker: string) {
-    if (!FMP_API_KEY) return mockProfile(ticker);
-    
-    const res = await fetch(`${BASE_URL}/profile/${ticker}?apikey=${FMP_API_KEY}`);
-    if (!res.ok) throw new Error("Failed to fetch profile");
-    const data = await res.json();
-    return data[0] || {};
-}
-
-function mockQuote(ticker: string) { return {}; }
-function mockFinancials(ticker: string) { return []; }
-function mockPrices(ticker: string, days: number) { 
-    // Return dummy price array
-    return Array.from({length: days}).map((_, i) => ({ close: 100 + Math.random() * 10 }));
-}
-function mockProfile(ticker: string) {
-    return { sector: "Technology", industry: "Software" };
 }

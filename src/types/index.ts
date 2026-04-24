@@ -1,5 +1,5 @@
 export type Severity = "WARNING" | "CONCERN" | "CRITICAL";
-export type Verdict = "PASS" | "WATCH" | "AVOID";
+export type Verdict = "STRONG BUY" | "BUY" | "HOLD" | "AVOID" | "PASS" | "WATCH";
 
 export interface RedFlag {
   id: string;
@@ -35,11 +35,11 @@ export interface EngineResult {
   alphaRankingStr: "Elite Alpha" | "High Alpha" | "Market Outperformer" | "Underperformer";
   verdict: Verdict;
   pillars: {
-    moat: PillarScore;
+    growth: PillarScore;
+    value: PillarScore;
+    stability: PillarScore;
     profitability: PillarScore;
-    financialStrength: PillarScore;
-    cashFlowQuality: PillarScore;
-    valuation: PillarScore;
+    dividend: PillarScore;
   };
   redFlags: RedFlag[];
 }
@@ -93,5 +93,32 @@ export interface Quote {
   price: number;
   pe: number;
   pfcf: number;
-  // additional real-time fields
+  marketCap: number;
+  dividendYield: number;
+}
+
+export interface FMPFinancialGrowth {
+  symbol: string;
+  date: string;
+  revenueGrowth: number;
+  netIncomeGrowth: number;
+  epsgrowth: number;
+}
+
+export interface FMPKeyMetrics {
+  symbol: string;
+  date: string;
+  roeTTM: number;
+  roaTTM: number;
+  debtToEquityTTM: number;
+  freeCashFlowPerShareTTM: number;
+  dividendYieldPercentageTTM: number;
+}
+
+export interface FMPProfile {
+  symbol: string;
+  companyName: string;
+  sector: string;
+  industry: string;
+  description: string;
 }

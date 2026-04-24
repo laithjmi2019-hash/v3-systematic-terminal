@@ -99,11 +99,18 @@ export default async function StockTerminal({ params }: { params: Promise<{ tick
   const resolvedParams = await params;
   const ticker = resolvedParams.ticker.toUpperCase();
   
-  const quote = await getQuote(ticker);
-  const financials = await getHistoricalFinancials(ticker);
+  // Real FMP APIs
+  const [quote, growthData, metricsData, profileData] = await Promise.all([
+    getQuote(ticker),
+    import('@/services/fmp/client').then(m => m.getFinancialGrowth(ticker)),
+    import('@/services/fmp/client').then(m => m.getKeyMetrics(ticker)),
+    import('@/services/fmp/client').then(m => m.getCompanyProfile(ticker))
+  ]);
+  
   const macroState = await getMacroState();
   
-  const baseResult = evaluateStock(ticker, financials, quote, macroState.multiplier);
+  // Notice evaluateStock signature has changed in scoring.ts to match the new inputs and rules
+  const baseResult = evaluateStock(ticker, quote, growthData, metricsData, macroState.multiplier);
   const finalResult = calculateAlphaAndRank(baseResult);
   const aiInsight = await generateAIExplanation(finalResult);
 
@@ -117,32 +124,16 @@ export default async function StockTerminal({ params }: { params: Promise<{ tick
           <div>
             <div className="flex items-center gap-4">
               <h1 className="text-4xl font-bold tracking-tight">{ticker}</h1>
-              <span className="text-3xl text-muted-foreground font-light">${quote.price || "0.00"}</span>
-              <Badge className="bg-primary/20 text-primary hover:bg-primary/30 border-none ml-2 tracking-widest uppercase">
-                  {finalResult.alphaRankingStr}
-              </Badge>
+              {profileData.companyName && <span className="text-xl text-muted-foreground hidden sm:inline-block">{profileData.companyName}</span>}
+              <span className="text-3xl text-muted-foreground font-light">${quote.price?.toFixed(2) || "0.00"}</span>
             </div>
             <div className="flex items-center gap-4 mt-2">
                <span className="text-sm text-muted-foreground font-mono">MACRO ADJ: {macroState.multiplier}x</span>
-               <span className="text-sm text-muted-foreground font-mono">ALPHA SCORE: {finalResult.alphaScore.toFixed(1)}/100</span>
+               <span className="text-sm text-muted-foreground font-mono">MARKET CAP: {((quote.marketCap || 0)/1e9).toFixed(1)}B</span>
             </div>
           </div>
           <VerdictBadge verdict={finalResult.verdict} totalScore={finalResult.totalScore} baseScore={finalResult.baseScore} />
         </div>
-
-        {/* Top level alerts */}
-        {finalResult.redFlags.length > 0 && (
-          <div className="border border-red-500/30 bg-red-500/10 p-4 rounded-lg flex flex-col gap-2">
-            <h4 className="text-red-500 font-bold uppercase tracking-wider text-xs flex items-center gap-2"><ShieldAlert className="h-4 w-4"/> Systematic Hard Alerts</h4>
-            {finalResult.redFlags.map((f, i) => (
-                <div key={i} className="flex gap-2 items-center text-sm">
-                   <strong className={`px-1.5 py-0.5 rounded text-[10px] ${f.severity === 'CRITICAL' ? 'bg-red-500 text-black' : 'bg-orange-500 text-black'}`}>{f.severity}</strong>
-                   <span className="text-muted-foreground">({f.metric}: {f.value})</span>
-                   <span>{f.message}</span>
-                </div>
-            ))}
-          </div>
-        )}
 
         <DecisionBox insight={aiInsight} />
 
@@ -150,11 +141,11 @@ export default async function StockTerminal({ params }: { params: Promise<{ tick
         <div>
            <h2 className="text-xl font-bold mb-4 mt-8 font-mono uppercase tracking-widest text-muted-foreground border-b pb-2">Mathematical Breakdown</h2>
            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-             <PillarCard title="Moat & Stability" pillar={finalResult.pillars.moat} />
-             <PillarCard title="Profitability" pillar={finalResult.pillars.profitability} />
-             <PillarCard title="Financial Strength" pillar={finalResult.pillars.financialStrength} />
-             <PillarCard title="Cash Flow Quality" pillar={finalResult.pillars.cashFlowQuality} />
-             <PillarCard title="Valuation" pillar={finalResult.pillars.valuation} />
+             <PillarCard title="Growth Score" pillar={finalResult.pillars.growth} />
+             <PillarCard title="Value Score" pillar={finalResult.pillars.value} />
+             <PillarCard title="Stability Score" pillar={finalResult.pillars.stability} />
+             <PillarCard title="Profitability Score" pillar={finalResult.pillars.profitability} />
+             <PillarCard title="Dividend Score" pillar={finalResult.pillars.dividend} />
            </div>
         </div>
 
