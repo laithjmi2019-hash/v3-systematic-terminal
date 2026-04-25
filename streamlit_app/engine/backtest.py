@@ -160,8 +160,40 @@ def run_simulation(start_year: int = 2010):
                         fcf_ps  = fcf / shares
                         pt_pfcf = px_today / fcf_ps if fcf_ps > 0 else 0
 
-                    bt_quote = {"price": px_today, "peForward": pt_pe, "pfcf": pt_pfcf}
-                    res = evaluate_stock(ticker, avail_fin, bt_quote, risk_profile, hist_returns_cache)
+                    bt_quote = {"price": px_today, "peForward": pt_pe, "pfcf": pt_pfcf, "sector": "DEFAULT", "dividendYield": 0}
+
+                    bt_growth = {"revenueGrowth": 0, "epsgrowth": 0, "netIncomeGrowth": 0, "yearsAveraged": 1}
+                    if len(avail_fin) >= 2:
+                        cur_rev = latest.get("revenue", 0) or 0
+                        prev_rev = avail_fin[1].get("revenue", 0) or 0
+                        if prev_rev: bt_growth["revenueGrowth"] = (cur_rev - prev_rev) / abs(prev_rev)
+                        
+                        cur_ni = latest.get("netIncome", 0) or 0
+                        prev_ni = avail_fin[1].get("netIncome", 0) or 0
+                        if prev_ni: 
+                            bt_growth["epsgrowth"] = (cur_ni - prev_ni) / abs(prev_ni)
+                            bt_growth["netIncomeGrowth"] = bt_growth["epsgrowth"]
+
+                    equity = latest.get("totalEquity", 1) or 1
+                    if equity == 0: equity = 1
+                    assets = latest.get("totalAssets", 1) or 1
+                    if assets == 0: assets = 1
+                    debt = latest.get("totalDebt", 0) or 0
+                    
+                    bt_metrics = {
+                        "debtToEquityTTM": debt/equity, 
+                        "roeTTM": ni/equity, 
+                        "roaTTM": ni/assets, 
+                        "freeCashFlowPerShareTTM": fcf, 
+                        "dividendYieldPercentageTTM": 0
+                    }
+                    
+                    # Convert raw returns to [{"close": price}] format required by V10 engine
+                    idx = spy_df[spy_df['date'] == date_str].index[0]
+                    start_idx = max(0, idx - 252)
+                    bt_prices = [{"close": p} for p in hist_returns_cache[ticker][start_idx:idx+1]]
+
+                    res = evaluate_stock(ticker, bt_quote, bt_growth, bt_metrics, bt_prices, risk_profile)
 
                     action = res.get("action", res.get("verdict", ""))
                     if action not in ["AVOID"]:

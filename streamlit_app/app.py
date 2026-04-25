@@ -11,9 +11,39 @@ from streamlit_searchbox import st_searchbox
 # V4 Imports
 from engine.backtest import run_simulation
 from engine.factors import calculate_factor_loads
-from data.ingester import ingest_historical_data
+from data.ingester import ingest_historical_data, UNIVERSE_SUBSET
 from engine.paper import get_live_holdings, execute_rebalance
 import datetime
+
+@st.cache_data(ttl=3600)
+def run_live_screener():
+    results = []
+    from data.fmp import get_quote, get_financial_growth, get_key_metrics, get_historical_prices
+    from engine.scoring import evaluate_stock
+    from engine.macro import get_macro_state
+    try:
+        macro = get_macro_state()
+    except Exception:
+        macro = {"state": "Neutral"}
+        
+    for ticker in UNIVERSE_SUBSET:
+        try:
+            quote = get_quote(ticker)
+            growth = get_financial_growth(ticker)
+            metrics = get_key_metrics(ticker)
+            prices = get_historical_prices(ticker, 252)
+            base_result = evaluate_stock(ticker, quote, growth, metrics, prices, macro)
+            if "error" not in base_result:
+                results.append({
+                    "Ticker": ticker,
+                    "Score": base_result["totalScore"],
+                    "Action": base_result.get("action", base_result.get("verdict", "")),
+                    "FwdPE": quote.get("peForward", 0),
+                    "Sector": quote.get("sector", "Broad")
+                })
+        except:
+            pass
+    return results
 
 st.set_page_config(page_title="V10 Institutional Terminal", layout="wide", page_icon="📈")
 
@@ -140,16 +170,24 @@ def page_terminal():
 
 
 def page_screener():
-    st.title("Prebuilt Intelligence Screener")
-    st.write("Using mock batch data for MVP. Connect to FMP batch logic for live run.")
-    preset = st.selectbox("Select Filter Preset", ["Elite Compounders", "Undervalued Quality", "High Risk Stocks"])
+    st.title("Live Intelligence Screener")
+    st.write("Cross-indexing the data universe using Free Multi-API Triage.")
+    preset = st.selectbox("Select Filter Preset", ["Elite Compounders (Score > 65)", "Undervalued Quality (< 25 PE)", "High Risk Stocks (Avoid)"])
     if st.button("Run Scan"):
-         st.write(f"Executing `{preset}` scan via Python backend equivalents...")
-         df = pd.DataFrame([
-             {"Ticker": "AAPL", "Score": 68, "AlphaRank": "Elite Alpha", "FwdPE": 28, "Moat": 18, "Status": "PASS"},
-             {"Ticker": "MSFT", "Score": 72, "AlphaRank": "Elite Alpha", "FwdPE": 30, "Moat": 19, "Status": "PASS"}
-         ])
-         st.dataframe(df)
+         with st.spinner(f"Executing `{preset}` scan across universe..."):
+             raw_data = run_live_screener()
+             df = pd.DataFrame(raw_data)
+             
+             if not df.empty:
+                 if "Elite Compounders" in preset:
+                     df = df[df["Score"] >= 65].sort_values("Score", ascending=False)
+                 elif "Undervalued" in preset:
+                     df = df[(df["FwdPE"] > 0) & (df["FwdPE"] < 25)].sort_values("Score", ascending=False)
+                 elif "High Risk" in preset:
+                     df = df[df["Action"].isin(["AVOID", "WATCH"])].sort_values("Score", ascending=True)
+                 st.dataframe(df.reset_index(drop=True))
+             else:
+                 st.warning("No data found, run Backtest bootstrap first.")
 
 def page_portfolio():
     st.title("Portfolio Downside Risk Optimizer")
@@ -256,12 +294,29 @@ def page_paper():
 
     st.markdown("---")
     if st.button("Trigger Structural Rebalance (EOD Execution)"):
-        with st.spinner("Evaluating engine rules..."):
-            execute_rebalance([
-                {"ticker": "MSFT", "date": str(datetime.date.today()), "weight": 0.5, "entry_price": 400},
-                {"ticker": "NVDA", "date": str(datetime.date.today()), "weight": 0.5, "entry_price": 800}
-            ])
-            st.success("Forward PnL markers updated in database.")
+        with st.spinner("Evaluating engine rules across live universe..."):
+            raw_data = run_live_screener()
+            df = pd.DataFrame(raw_data)
+            if not df.empty:
+                top_targets = df[df["Action"].isin(["STRONG BUY", "BUY", "ACCUMULATE"])].sort_values("Score", ascending=False).head(5)
+                new_holdings = []
+                weight = 1.0 / len(top_targets) if len(top_targets) > 0 else 0
+                for _, row in top_targets.iterrows():
+                    from data.fmp import get_quote
+                    px = get_quote(row["Ticker"]).get("price", 0)
+                    new_holdings.append({
+                        "ticker": row["Ticker"],
+                        "date": str(datetime.date.today()),
+                        "weight": weight,
+                        "entry_price": px
+                    })
+                if new_holdings:
+                    execute_rebalance(new_holdings)
+                    st.success(f"Forward PnL markers updated. Activated {len(new_holdings)} assets.")
+                else:
+                    st.warning("No assets met buying criteria today.")
+            else:
+                 st.error("Engine failed to compute candidates.")
 
 # ----------- NAV -----------------
 nav = st.sidebar.radio("Navigation", [
