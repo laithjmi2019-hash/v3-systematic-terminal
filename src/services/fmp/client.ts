@@ -1,38 +1,88 @@
 const FMP_API_KEY = process.env.FMP_API_KEY || "ZopJDkQbPkxpeehQrJtxGAQRVWJnkiop";
+const ALPHA_VANTAGE_KEY = process.env.ALPHA_VANTAGE_KEY || "WLZRN9J45SFA1NEJ";
+const FINNHUB_KEY = process.env.FINNHUB_KEY || "d2c9a2pr01qihtcqnssgd2c9a2pr01qihtcqnst0";
 const BASE_URL = "https://financialmodelingprep.com/api/v3";
 
 export async function getQuote(ticker: string) {
-  const res = await fetch(`${BASE_URL}/quote/${ticker}?apikey=${FMP_API_KEY}`, { cache: 'no-store' });
-  if (!res.ok) throw new Error("Failed to fetch quote");
-  const data = await res.json();
-  return data[0] || {}; 
+  let result: any = {};
+  // 1. Try Finnhub for price
+  try {
+      const res = await fetch(`https://finnhub.io/api/v1/quote?symbol=${ticker}&token=${FINNHUB_KEY}`, { cache: 'no-store' });
+      if (res.ok) {
+         const data = await res.json();
+         if (data.c) {
+             result.price = data.c;
+         }
+      }
+  } catch {}
+  
+  // 2. Try FMP (Free Tier Quote usually works)
+  try { 
+      const res = await fetch(`${BASE_URL}/quote/${ticker}?apikey=${FMP_API_KEY}`, { cache: 'no-store' });
+      if (res.ok) {
+          const data = await res.json();
+          if (data[0]) {
+              result = { ...data[0], price: result.price || data[0].price }; 
+          }
+      }
+  } catch {}
+  return result;
 }
 
 export async function getFinancialGrowth(ticker: string) {
-  const res = await fetch(`${BASE_URL}/financial-growth/${ticker}?limit=3&apikey=${FMP_API_KEY}`, { cache: 'no-store' });
-  if (!res.ok) throw new Error("Failed to fetch financial growth");
-  const data = await res.json();
+  let result = { revenueGrowth: 0, netIncomeGrowth: 0, epsgrowth: 0, yearsAveraged: 0 };
   
-  if (!data || data.length === 0) {
-      return { revenueGrowth: 0, netIncomeGrowth: 0, epsgrowth: 0, yearsAveraged: 0 };
-  }
-  
-  const rev_avg = data.reduce((acc: number, val: any) => acc + (val.revenueGrowth || 0), 0) / data.length;
-  const eps_avg = data.reduce((acc: number, val: any) => acc + (val.epsgrowth || val.netIncomeGrowth || 0), 0) / data.length;
-
-  return {
-      revenueGrowth: rev_avg,
-      netIncomeGrowth: eps_avg,
-      epsgrowth: eps_avg,
-      yearsAveraged: data.length
-  };
+  // 1. Try AlphaVantage (100% Free fallback)
+  try {
+     const res = await fetch(`https://www.alphavantage.co/query?function=INCOME_STATEMENT&symbol=${ticker}&apikey=${ALPHA_VANTAGE_KEY}`, { cache: 'no-store' });
+     if (res.ok) {
+         const data = await res.json();
+         if (data.annualReports) {
+             const reports = data.annualReports;
+             const revGrowths: number[] = [];
+             const niGrowths: number[] = [];
+             const limit = Math.min(4, reports.length);
+             
+             for (let i = 0; i < limit - 1; i++) {
+                 const curRev = parseFloat(reports[i].totalRevenue || '0');
+                 const prevRev = parseFloat(reports[i+1].totalRevenue || '0');
+                 if (prevRev !== 0) revGrowths.push((curRev - prevRev) / Math.abs(prevRev));
+                 
+                 const curNi = parseFloat(reports[i].netIncome || '0');
+                 const prevNi = parseFloat(reports[i+1].netIncome || '0');
+                 if (prevNi !== 0) niGrowths.push((curNi - prevNi) / Math.abs(prevNi));
+             }
+             
+             if (revGrowths.length > 0) result.revenueGrowth = revGrowths.reduce((a,b)=>a+b,0)/revGrowths.length;
+             if (niGrowths.length > 0) {
+                 result.netIncomeGrowth = niGrowths.reduce((a,b)=>a+b,0)/niGrowths.length;
+                 result.epsgrowth = result.netIncomeGrowth;
+             }
+             result.yearsAveraged = Math.max(revGrowths.length, niGrowths.length);
+             return result;
+         }
+     }
+  } catch {}
+  return result;
 }
 
 export async function getKeyMetrics(ticker: string) {
-  const res = await fetch(`${BASE_URL}/key-metrics-ttm/${ticker}?apikey=${FMP_API_KEY}`, { cache: 'no-store' });
-  if (!res.ok) throw new Error("Failed to fetch key metrics");
-  const data = await res.json();
-  return data[0] || {};
+    let metrics: any = { roeTTM: 0, roaTTM: 0, debtToEquityTTM: 0, dividendYieldPercentageTTM: 0 };
+    
+    // 1. Try Finnhub Metrics (100% Free fallback)
+    try {
+        const res = await fetch(`https://finnhub.io/api/v1/stock/metric?symbol=${ticker}&metric=all&token=${FINNHUB_KEY}`, { cache: 'no-store' });
+        if (res.ok) {
+            const data = await res.json();
+            if (data.metric) {
+                metrics.roeTTM = (data.metric.roeTTM || 0) / 100.0;
+                metrics.roaTTM = (data.metric.roaTTM || 0) / 100.0;
+                metrics.debtToEquityTTM = (data.metric["totalDebt/totalEquityQuarterly"] || 0) / 100.0;
+                metrics.dividendYieldPercentageTTM = (data.metric.dividendYieldIndicatedAnnual || 0) / 100.0;
+            }
+        }
+    } catch {}
+    return metrics;
 }
 
 export async function getCompanyProfile(ticker: string) {

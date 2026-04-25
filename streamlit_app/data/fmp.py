@@ -6,6 +6,8 @@ import pandas as pd
 from datetime import datetime, timedelta
 
 FMP_API_KEY = os.environ.get("FMP_API_KEY", "ZopJDkQbPkxpeehQrJtxGAQRVWJnkiop")
+ALPHA_VANTAGE_KEY = os.environ.get("ALPHA_VANTAGE_KEY", "WLZRN9J45SFA1NEJ")
+FINNHUB_KEY = os.environ.get("FINNHUB_KEY", "d2c9a2pr01qihtcqnssgd2c9a2pr01qihtcqnst0")
 BASE_URL = "https://financialmodelingprep.com/api/v3"
 
 @st.cache_data(ttl=86400)
@@ -118,6 +120,23 @@ def get_quote(ticker: str) -> dict:
         sector    = info.get("sector", "DEFAULT") or "DEFAULT"
         div_yield = float(info.get("dividendYield", 0) or 0)
 
+    except Exception:
+        pass
+
+    # --- STEP 1.5: FINNHUB Fallback for missing elements ---
+    try:
+        if price == 0.0 or div_yield == 0.0:
+            res = requests.get(f"https://finnhub.io/api/v1/quote?symbol={ticker}&token={FINNHUB_KEY}", timeout=5)
+            if res.status_code == 200:
+                d = res.json()
+                if price == 0.0 and d.get("c"): price = float(d["c"])
+            
+            res_m = requests.get(f"https://finnhub.io/api/v1/stock/metric?symbol={ticker}&metric=all&token={FINNHUB_KEY}", timeout=5)
+            if res_m.status_code == 200:
+                dm = res_m.json()
+                if "metric" in dm:
+                    if fwd_pe == 0.0: fwd_pe = float(dm["metric"].get("peNormalizedAnnual", 0) or 0)
+                    if div_yield == 0.0: div_yield = float(dm["metric"].get("dividendYieldIndicatedAnnual", 0) or 0)
     except Exception:
         pass
 
@@ -304,39 +323,131 @@ def get_analyst_revisions(ticker: str) -> dict:
 
 @st.cache_data(ttl=86400)
 def get_financial_growth(ticker: str) -> dict:
-    if not FMP_API_KEY:
-        return {}
+    result = {"revenueGrowth": 0, "netIncomeGrowth": 0, "epsgrowth": 0, "yearsAveraged": 1}
+    
+    # 1. TRY YFINANCE (Primary 100% Free)
     try:
-        url = f"{BASE_URL}/financial-growth/{ticker}?limit=3&apikey={FMP_API_KEY}"
-        res = requests.get(url, timeout=8)
-        if res.status_code == 200 and res.json():
-            data = res.json()
-            if not data:
-                return {}
+        t = yf.Ticker(ticker)
+        inc = t.financials
+        if not inc.empty and len(inc.columns) >= 2:
+            def get_row(df, names):
+                for name in names:
+                    if name in df.index: return df.loc[name]
+                return None
             
-            # Compute 3-Year Averages
-            rev_avg = sum([x.get("revenueGrowth", 0) or 0 for x in data]) / len(data)
-            eps_avg = sum([x.get("epsgrowth", x.get("netIncomeGrowth", 0)) or 0 for x in data]) / len(data)
-
-            return {
-                "revenueGrowth": rev_avg,
-                "netIncomeGrowth": eps_avg,
-                "epsgrowth": eps_avg,
-                "yearsAveraged": len(data)
-            }
+            rev_row = get_row(inc, ["Total Revenue", "Operating Revenue", "Revenue"])
+            ni_row = get_row(inc, ["Net Income", "Net Income Common Stockholders"])
+            
+            rev_growths = []
+            ni_growths = []
+            
+            limit = min(4, len(inc.columns)) 
+            for i in range(limit - 1):
+                cur_rev = rev_row.iloc[i] if rev_row is not None else 0
+                prev_rev = rev_row.iloc[i+1] if rev_row is not None else 0
+                if prev_rev and prev_rev != 0:
+                    rev_growths.append((cur_rev - prev_rev) / abs(prev_rev))
+                    
+                cur_ni = ni_row.iloc[i] if ni_row is not None else 0
+                prev_ni = ni_row.iloc[i+1] if ni_row is not None else 0
+                if prev_ni and prev_ni != 0:
+                    ni_growths.append((cur_ni - prev_ni) / abs(prev_ni))
+            
+            if rev_growths or ni_growths:
+                r_avg = sum(rev_growths)/len(rev_growths) if rev_growths else 0
+                n_avg = sum(ni_growths)/len(ni_growths) if ni_growths else 0
+                result.update({
+                    "revenueGrowth": r_avg,
+                    "netIncomeGrowth": n_avg,
+                    "epsgrowth": n_avg,
+                    "yearsAveraged": max(len(rev_growths), len(ni_growths))
+                })
+                return result
     except Exception:
         pass
-    return {}
+
+    # 2. TRY ALPHA VANTAGE (Fallback)
+    try:
+        url = f"https://www.alphavantage.co/query?function=INCOME_STATEMENT&symbol={ticker}&apikey={ALPHA_VANTAGE_KEY}"
+        res = requests.get(url, timeout=8)
+        data = res.json()
+        if "annualReports" in data:
+            reports = data["annualReports"]
+            rev_growths = []
+            ni_growths = []
+            limit = min(4, len(reports))
+            for i in range(limit - 1):
+                cur_rev = float(reports[i].get("totalRevenue", 0) or 0)
+                prev_rev = float(reports[i+1].get("totalRevenue", 0) or 0)
+                if prev_rev != 0: rev_growths.append((cur_rev - prev_rev) / abs(prev_rev))
+                
+                cur_ni = float(reports[i].get("netIncome", 0) or 0)
+                prev_ni = float(reports[i+1].get("netIncome", 0) or 0)
+                if prev_ni != 0: ni_growths.append((cur_ni - prev_ni) / abs(prev_ni))
+            
+            if rev_growths or ni_growths:
+                r_avg = sum(rev_growths)/len(rev_growths) if rev_growths else 0
+                n_avg = sum(ni_growths)/len(ni_growths) if ni_growths else 0
+                result.update({
+                    "revenueGrowth": r_avg,
+                    "netIncomeGrowth": n_avg,
+                    "epsgrowth": n_avg,
+                    "yearsAveraged": max(len(rev_growths), len(ni_growths))
+                })
+                return result
+    except Exception:
+        pass
+        
+    return result
 
 @st.cache_data(ttl=86400)
 def get_key_metrics(ticker: str) -> dict:
-    if not FMP_API_KEY:
-        return {}
+    metrics = {"roeTTM": 0, "roaTTM": 0, "debtToEquityTTM": 0, "freeCashFlowPerShareTTM": 0, "dividendYieldPercentageTTM": 0}
+    
+    # 1. TRY YFINANCE (Primary)
     try:
-        url = f"{BASE_URL}/key-metrics-ttm/{ticker}?apikey={FMP_API_KEY}"
-        res = requests.get(url, timeout=8)
-        if res.status_code == 200 and res.json():
-            return res.json()[0]
+        t = yf.Ticker(ticker)
+        info = t.info or {}
+        
+        metrics["roeTTM"] = info.get("returnOnEquity", 0) or 0
+        metrics["roaTTM"] = info.get("returnOnAssets", 0) or 0
+        metrics["debtToEquityTTM"] = (info.get("debtToEquity", 0) or 0) / 100.0 if info.get("debtToEquity") else 0
+        metrics["freeCashFlowPerShareTTM"] = info.get("freeCashflow", 0) or 0
+        metrics["dividendYieldPercentageTTM"] = info.get("dividendYield", 0) or 0
+        
+        # Manual fallback from raw sheets
+        if metrics["roeTTM"] == 0 or metrics["debtToEquityTTM"] == 0:
+            bs = t.balance_sheet
+            inc = t.financials
+            if not bs.empty and not inc.empty:
+                def get_val(df, names):
+                    for name in names:
+                        if name in df.index: return df.loc[name].iloc[0]
+                    return 0
+                equity = get_val(bs, ["Stockholders Equity", "Total Stockholder Equity"])
+                assets = get_val(bs, ["Total Assets"])
+                debt = get_val(bs, ["Total Debt", "Long Term Debt"])
+                ni = get_val(inc, ["Net Income"])
+                
+                if equity and equity != 0:
+                    if metrics["roeTTM"] == 0: metrics["roeTTM"] = ni / equity
+                    if metrics["debtToEquityTTM"] == 0: metrics["debtToEquityTTM"] = debt / equity
+                if assets and assets != 0 and metrics["roaTTM"] == 0:
+                    metrics["roaTTM"] = ni / assets
     except Exception:
         pass
-    return {}
+        
+    # 2. TRY FINNHUB (Fallback Tier 2)
+    try:
+        if metrics["roeTTM"] == 0 or metrics["debtToEquityTTM"] == 0:
+            url = f"https://finnhub.io/api/v1/stock/metric?symbol={ticker}&metric=all&token={FINNHUB_KEY}"
+            res = requests.get(url, timeout=5)
+            if res.status_code == 200:
+                data = res.json().get("metric", {})
+                if metrics["roeTTM"] == 0: metrics["roeTTM"] = (data.get("roeTTM", 0) or 0) / 100.0
+                if metrics["roaTTM"] == 0: metrics["roaTTM"] = (data.get("roaTTM", 0) or 0) / 100.0
+                if metrics["debtToEquityTTM"] == 0: metrics["debtToEquityTTM"] = (data.get("totalDebt/totalEquityQuarterly", 0) or 0) / 100.0
+    except Exception:
+        pass
+
+    return metrics
