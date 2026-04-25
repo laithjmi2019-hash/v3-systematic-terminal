@@ -100,17 +100,22 @@ export default async function StockTerminal({ params }: { params: Promise<{ tick
   const ticker = resolvedParams.ticker.toUpperCase();
   
   // Real FMP APIs
-  const [quote, growthData, metricsData, profileData] = await Promise.all([
+  const [quote, growthData, metricsData, profileData, pricesData, revsData] = await Promise.all([
     getQuote(ticker),
     import('@/services/fmp/client').then(m => m.getFinancialGrowth(ticker)),
     import('@/services/fmp/client').then(m => m.getKeyMetrics(ticker)),
-    import('@/services/fmp/client').then(m => m.getCompanyProfile(ticker))
+    import('@/services/fmp/client').then(m => m.getCompanyProfile(ticker)),
+    import('@/services/fmp/client').then(m => m.getHistoricalPrices(ticker, 252)),
+    import('@/services/fmp/client').then(m => m.getAnalystRevisions(ticker))
   ]);
   
+  quote.sector = profileData.sector || "DEFAULT";
+  quote.revisions_score = revsData.revisions_score !== undefined ? revsData.revisions_score : 0.5;
+
   const macroState = await getMacroState();
   
-  // Notice evaluateStock signature has changed in scoring.ts to match the new inputs and rules
-  const baseResult = evaluateStock(ticker, quote, growthData, metricsData, macroState.multiplier);
+  // Notice evaluateStock signature has changed in scoring.ts to match the new V10 inputs
+  const baseResult = evaluateStock(ticker, quote, growthData, metricsData, pricesData, macroState.multiplier);
   const finalResult = calculateAlphaAndRank(baseResult);
   const aiInsight = await generateAIExplanation(finalResult);
 

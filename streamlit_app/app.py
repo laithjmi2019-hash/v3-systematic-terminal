@@ -32,11 +32,15 @@ def page_terminal():
         with st.spinner(f"Fetching fundamentals for {selected_ticker}..."):
             ticker = resolve_ticker(selected_ticker).upper()
             
-            from data.fmp import get_financial_growth, get_key_metrics
+            from data.fmp import get_financial_growth, get_key_metrics, get_historical_prices, get_analyst_revisions
             
             quote = get_quote(ticker)
             growth = get_financial_growth(ticker)
             metrics = get_key_metrics(ticker)
+            prices = get_historical_prices(ticker, 252)
+            
+            revs = get_analyst_revisions(ticker)
+            quote["revisions_score"] = revs.get("revisions_score", 0.5)
 
             # Macro — used only for action downgrade, not scoring weights
             try:
@@ -44,7 +48,7 @@ def page_terminal():
             except Exception:
                 macro = {"state": "Neutral"}
 
-            base_result = evaluate_stock(ticker, quote, growth, metrics, macro)
+            base_result = evaluate_stock(ticker, quote, growth, metrics, prices, macro)
 
             if "error" in base_result:
                 st.error(f"Scoring error: {base_result['error']}")

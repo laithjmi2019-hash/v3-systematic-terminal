@@ -1,4 +1,4 @@
-export type Severity = "WARNING" | "CONCERN" | "CRITICAL";
+export type Severity = "INFO" | "WARNING" | "CONCERN" | "CRITICAL";
 export type Verdict = "STRONG BUY" | "BUY" | "HOLD" | "AVOID" | "PASS" | "WATCH";
 
 export interface RedFlag {
@@ -95,14 +95,17 @@ export interface Quote {
   pfcf: number;
   marketCap: number;
   dividendYield: number;
+  sector?: string;
+  revisions_score?: number;
 }
 
 export interface FMPFinancialGrowth {
-  symbol: string;
-  date: string;
+  symbol?: string;
+  date?: string;
   revenueGrowth: number;
   netIncomeGrowth: number;
   epsgrowth: number;
+  yearsAveraged?: number;
 }
 
 export interface FMPKeyMetrics {

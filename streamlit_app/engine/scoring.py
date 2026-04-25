@@ -2,7 +2,7 @@ import logging
 
 logger = logging.getLogger(__name__)
 
-def evaluate_stock(ticker: str, quote: dict, growth: dict, metrics: dict, macro_state: dict = None):
+def evaluate_stock(ticker: str, quote: dict, growth: dict, metrics: dict, prices: list, macro_state: dict = None):
     red_flags = []
     
     def build_breakdown(metric, points, max_points, passed, val_str, exp):
@@ -18,30 +18,43 @@ def evaluate_stock(ticker: str, quote: dict, growth: dict, metrics: dict, macro_
 
     # 1. GROWTH (Max 50)
     rev_grow = growth.get("revenueGrowth", 0) or 0
-    eps_grow = growth.get("netIncomeGrowth", growth.get("epsgrowth", 0)) or 0
+    eps_grow = growth.get("epsgrowth", growth.get("netIncomeGrowth", 0)) or 0
+    years_avg = growth.get("yearsAveraged", 1)
 
     rev_pts = 25 if rev_grow > 0.10 else (15 if rev_grow >= 0.05 else 5)
     eps_pts = 25 if eps_grow > 0.10 else (15 if eps_grow >= 0.05 else 5)
     growth_total = rev_pts + eps_pts
 
     p_growth = {
-        "title": "Growth Score", "total": float(growth_total), "max": 50, "penaltyRatio": 0,
+        "title": f"Growth Score ({years_avg}-Yr Avg)", "total": float(growth_total), "max": 50, "penaltyRatio": 0,
         "breakdown": [
             build_breakdown("Revenue Growth", rev_pts, 25, rev_pts > 5, f"{rev_grow*100:.1f}%", ">10%=25, 5-10%=15, <5%=5"),
             build_breakdown("Earnings Growth", eps_pts, 25, eps_pts > 5, f"{eps_grow*100:.1f}%", ">10%=25, 5-10%=15, <5%=5")
         ]
     }
 
-    # 2. VALUE (Max 20)
+    # 2. VALUE (Sector Relative Valuation) (Max 20)
     pe = quote.get("pe", quote.get("peForward", 0)) or 0
+    sector = quote.get("sector", "DEFAULT")
+
+    SECTOR_PE = {
+        "Technology": 28.0, "Healthcare": 22.0, "Financial Services": 14.0,
+        "Consumer Cyclical": 20.0, "Industrials": 21.0, "Energy": 12.0,
+        "Consumer Defensive": 20.0, "Utilities": 17.0, "Real Estate": 25.0,
+        "Basic Materials": 15.0, "Communication Services": 19.0, "DEFAULT": 20.0
+    }
+    sec_median_pe = SECTOR_PE.get(sector, 20.0)
+    
     pe_pts = 5
-    if pe > 0 and pe < 15: pe_pts = 20
-    elif 15 <= pe <= 25: pe_pts = 10
+    rel_pe = (pe / sec_median_pe) if (sec_median_pe > 0 and pe > 0) else 999.0
+    
+    if pe > 0 and rel_pe <= 0.8: pe_pts = 20
+    elif pe > 0 and rel_pe <= 1.2: pe_pts = 10
 
     p_value = {
-        "title": "Value Score", "total": float(pe_pts), "max": 20, "penaltyRatio": 0,
+        "title": "Value Score (Sector Rel)", "total": float(pe_pts), "max": 20, "penaltyRatio": 0,
         "breakdown": [
-            build_breakdown("P/E Ratio", pe_pts, 20, pe_pts > 5, f"{pe:.1f}", "<15=20, 15-25=10, >25=5")
+            build_breakdown("P/E Ratio", pe_pts, 20, pe_pts > 5, f"{pe:.1f} vs {sec_median_pe:.1f} (Peer)", "Rel PE <=0.8=20, <=1.2=10, >1.2=5")
         ]
     }
 
@@ -78,12 +91,9 @@ def evaluate_stock(ticker: str, quote: dict, growth: dict, metrics: dict, macro_
     }
 
     # 5. DIVIDEND (Max 10)
-    # dividendYieldPercentageTTM might be None, fallback to dividendYield
     yield_val = metrics.get("dividendYieldPercentageTTM")
-    if yield_val is None:
-        yield_val = quote.get("dividendYield", 0)
+    if yield_val is None: yield_val = quote.get("dividendYield", 0)
     yield_pct = yield_val or 0
-    
     formatted_yield = yield_pct * 100 if yield_pct < 1 else yield_pct
 
     div_pts = 0
@@ -98,12 +108,48 @@ def evaluate_stock(ticker: str, quote: dict, growth: dict, metrics: dict, macro_
     }
 
     base_total = growth_total + pe_pts + stab_total + prof_total + div_pts
-    
-    macro_multiplier = 1.0
-    if macro_state and "multiplier" in macro_state:
-        macro_multiplier = macro_state["multiplier"]
 
-    final_score = base_total * macro_multiplier
+    # 6. ENGINES & GUARDRAILS (V10 Institutional)
+    
+    # Smart Money Revisions Bonus/Penalty
+    rev_score = quote.get("revisions_score", 0.5)
+    bonus_penalty = 0
+    if rev_score >= 0.75: bonus_penalty = 10
+    elif rev_score <= 0.25: bonus_penalty = -15
+    
+    # 200 SMA Kill Switch logic
+    fail_trend_gate = False
+    curr_price = float(quote.get("price", 0))
+    sma200 = 0.0
+    if prices and len(prices) > 50:
+        prices_subset = [float(day.get("close", 0)) for day in prices[-200:]]
+        sma200 = sum(prices_subset) / len(prices_subset)
+        if curr_price > 0 and curr_price < sma200:
+            fail_trend_gate = True
+            red_flags.append({
+                "severity": "CRITICAL", 
+                "metric": "SMA 200 Trend Gate", 
+                "message": f"Structural downtrend. Price (${curr_price:.2f}) < SMA200 (${sma200:.2f}). Max score capped at HOLD."
+            })
+    
+    if bonus_penalty != 0:
+        red_flags.append({
+            "severity": "INFO" if bonus_penalty > 0 else "WARNING", 
+            "metric": "Smart Money / Analyst Revisions", 
+            "message": f"{'+' if bonus_penalty > 0 else ''}{bonus_penalty} point adjustment."
+        })
+
+    final_score = base_total + bonus_penalty
+    macro_multiplier = macro_state.get("multiplier", 1.0) if macro_state else 1.0
+    final_score = final_score * macro_multiplier
+    
+    # Limit maximum score to 150
+    final_score = min(final_score, 150)
+
+    # Hard-Fail Kill Switch Application
+    if fail_trend_gate:
+        # Heavily cap maximum out of 150 so it never reads BUY/STRONG BUY
+        final_score = min(final_score, 64)
 
     if final_score >= 80:
         verdict = "STRONG BUY"

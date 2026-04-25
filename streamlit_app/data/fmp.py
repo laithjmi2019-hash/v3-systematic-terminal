@@ -307,10 +307,23 @@ def get_financial_growth(ticker: str) -> dict:
     if not FMP_API_KEY:
         return {}
     try:
-        url = f"{BASE_URL}/financial-growth/{ticker}?limit=1&apikey={FMP_API_KEY}"
+        url = f"{BASE_URL}/financial-growth/{ticker}?limit=3&apikey={FMP_API_KEY}"
         res = requests.get(url, timeout=8)
         if res.status_code == 200 and res.json():
-            return res.json()[0]
+            data = res.json()
+            if not data:
+                return {}
+            
+            # Compute 3-Year Averages
+            rev_avg = sum([x.get("revenueGrowth", 0) or 0 for x in data]) / len(data)
+            eps_avg = sum([x.get("epsgrowth", x.get("netIncomeGrowth", 0)) or 0 for x in data]) / len(data)
+
+            return {
+                "revenueGrowth": rev_avg,
+                "netIncomeGrowth": eps_avg,
+                "epsgrowth": eps_avg,
+                "yearsAveraged": len(data)
+            }
     except Exception:
         pass
     return {}
