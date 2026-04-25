@@ -15,12 +15,12 @@ from data.ingester import ingest_historical_data
 from engine.paper import get_live_holdings, execute_rebalance
 import datetime
 
-st.set_page_config(page_title="V8 Institutional Terminal", layout="wide", page_icon="📈")
+st.set_page_config(page_title="V10 Institutional Terminal", layout="wide", page_icon="📈")
 
 
 # ----------- PAGES ---------------
 def page_terminal():
-    st.title("V8 Systematic Terminal")
+    st.title("V10 Institutional Terminal")
     st.write("Search Company or Ticker:")
 
     selected_ticker = st_searchbox(
@@ -170,7 +170,7 @@ def page_portfolio():
 
 def page_macro():
     st.title("Strategy Intelligence Dashboard")
-    st.markdown("V8 Dynamic Allocation Layer — Macro controls **position sizing**, not scoring.")
+    st.markdown("V10 Dynamic Allocation Layer — Macro controls **position sizing**, not scoring. The V10 Engine evaluates raw metrics directly under strict thresholds.")
 
     try:
         macro = get_macro_state()
@@ -196,7 +196,7 @@ def page_macro():
 
 # --- V6/V8 SPECIFIC PAGES ---
 def page_validation():
-    st.title("V8 Backtest & Validation Engine")
+    st.title("V10 Backtest & Validation Engine")
     st.warning("**SURVIVORSHIP BIAS DISCLOSURE:** This backtest operates dynamically on currently surviving equities.")
 
     if st.button("Full Bootstrap & Ingest (Run Once)"):
